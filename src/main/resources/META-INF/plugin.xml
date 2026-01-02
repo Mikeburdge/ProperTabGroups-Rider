@@ -4,12 +4,15 @@
     <name>ProperTabGroups-Rider</name>
     <vendor>mikeburdge</vendor>
 
-    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.rider</depends>
 
     <resource-bundle>messages.MyBundle</resource-bundle>
 
     <extensions defaultExtensionNs="com.intellij">
-        <toolWindow factoryClass="com.github.mikeburdge.propertabgroupsrider.toolWindow.MyToolWindowFactory" id="MyToolWindow"/>
-        <postStartupActivity implementation="com.github.mikeburdge.propertabgroupsrider.startup.MyProjectActivity" />
+        <toolWindow
+                id="ProperTabGroups"
+                factoryClass="com.github.mikeburdge.propertabgroupsrider.toolWindow.ProperTabGroupsToolWindowFactory"
+                anchor="right"/>
+        <postStartupActivity implementation="com.github.mikeburdge.propertabgroupsrider.startup.MyProjectActivity"/>
     </extensions>
 </idea-plugin>

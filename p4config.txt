@@ -1,0 +1,4 @@
+P4PORT=1666
+P4USER=mburdge
+P4CLIENT=mburdge_PME1-PC-000177_4226
+P4IGNORE=.p4ignore.txt;.gitignore
