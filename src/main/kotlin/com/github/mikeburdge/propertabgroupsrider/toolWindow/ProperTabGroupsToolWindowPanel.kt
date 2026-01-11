@@ -2,6 +2,7 @@ package com.github.mikeburdge.propertabgroupsrider.toolWindow
 
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.ui.SearchTextField
 import com.intellij.ui.treeStructure.Tree
 import java.util.*
@@ -9,7 +10,9 @@ import javax.swing.tree.DefaultMutableTreeNode
 import javax.swing.tree.DefaultTreeModel
 import com.intellij.ui.DocumentAdapter
 import com.intellij.ui.components.JBScrollPane
+import jdk.internal.org.jline.terminal.MouseEvent
 import java.awt.BorderLayout
+import java.awt.event.MouseAdapter
 import javax.swing.JPanel
 import javax.swing.event.DocumentEvent
 
@@ -79,9 +82,22 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             }
         })
 
+        tree.addMouseListener(object: MouseAdapter()
+        {
+            override fun mouseClicked(e: MouseEvent) {
+                val path = tree.getPathForLocation(e.x, e.y)?: return
+                val node = path.lastPathComponent as? DefaultMutableTreeNode ?: return
+                val data = node.userObject
+
+                if (data is NodeData.FileItem) {
+                    val virtualFile = VirtualFileManager.getInstance().findFileByUrl(data.fileUrl) ?: return
+                    FileEditorManager.getInstance(project).openFile(virtualFile, true)
+                }
+            }
+        })
+
         // todo: renderer
         // todo: drag and drop
-
 
         rebuildTree()
     }
