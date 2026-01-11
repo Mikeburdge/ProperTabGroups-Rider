@@ -9,12 +9,11 @@ import javax.swing.tree.DefaultMutableTreeNode
 import javax.swing.tree.DefaultTreeModel
 import com.intellij.ui.DocumentAdapter
 import com.intellij.ui.components.JBScrollPane
-import com.intellij.ui.content.ContentManagerEvent
 import java.awt.BorderLayout
 import javax.swing.JPanel
 import javax.swing.event.DocumentEvent
 
-class ProperTabGroupsToolWindowPanel(private val project: Project): JPanel(BorderLayout()) {
+class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     private sealed class NodeData {
         data class GroupHeader(val id: UUID, val name: String) : NodeData()
@@ -26,6 +25,15 @@ class ProperTabGroupsToolWindowPanel(private val project: Project): JPanel(Borde
             val parentGroupId: UUID? // null means unassigned
         ) : NodeData()
     }
+
+    private data class Group(val id: UUID, val name: String)
+
+    private val groups: MutableList<Group> = mutableListOf(
+        Group(UUID.randomUUID(), "Gameplay"),
+        Group(UUID.randomUUID(), "UI"),
+    )
+
+    private val membershipMappingByUrl: MutableMap<String, MutableSet<UUID>> = mutableMapOf()
 
     private data class GroupItem(val name: String, val tabs: List<String>)
 
@@ -79,20 +87,17 @@ class ProperTabGroupsToolWindowPanel(private val project: Project): JPanel(Borde
         rebuildTree()
     }
 
-    @Suppress("KotlinUnreachableCode")
     private fun rebuildTree() {
 
         rootNode.removeAllChildren()
 
-        val groups = TODO("load groups List<Group>") // persistence stuff for later
-
-        val mapping: Map<String, Set<UUID>> = TODO("load the mapping")// initialise
 
         val openFiles = FileEditorManager.getInstance(project).openFiles
 
         val unassignedNode = DefaultMutableTreeNode(NodeData.UnassignedHeader)
-        val unassignedFiles = openFiles.filter { file -> mapping[file.url].isNullOrEmpty() }
+        val unassignedFiles = openFiles.filter { file -> membershipMappingByUrl[file.url].isNullOrEmpty() }
 
+        // handle unassigned tabs
         for (file in unassignedFiles) {
             unassignedNode.add(
                 DefaultMutableTreeNode(
@@ -105,9 +110,29 @@ class ProperTabGroupsToolWindowPanel(private val project: Project): JPanel(Borde
             )
         }
 
-
         // filter unassigned. replaced the if statement with a "safe access expression"
         filterNode(unassignedNode)?.let { rootNode.add(it) }
+
+        // handle member tabs
+        for (group in groups) {
+            val groupNode = DefaultMutableTreeNode(NodeData.GroupHeader(group.id, group.name))
+
+            val memberUrls = membershipMappingByUrl.asSequence().filter { (_, groupIds) -> groupIds.contains(group.id) }
+                .map { (url, _) -> url }.toList()
+
+            for (url in memberUrls) {
+                groupNode.add(
+                    DefaultMutableTreeNode(
+                        NodeData.FileItem(
+                            fileUrl = url,
+                            displayName = displayNameFromUrl(url),
+                            parentGroupId = group.id
+                        )
+                    )
+                )
+            }
+        }
+
 
         treeModel.reload()
 
@@ -154,9 +179,13 @@ class ProperTabGroupsToolWindowPanel(private val project: Project): JPanel(Borde
         }
     }
 
-    private fun shouldKeepGroupNode(node: DefaultMutableTreeNode): Boolean {
-
+    private fun displayNameFromUrl(url: String): String {
+        val trimmed = url.trimEnd('/')
+        val lastSlash =
+            maxOf(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\')) // this should handle the last slash issues
+        return if (lastSlash >= 0) trimmed.substring(lastSlash + 1) else trimmed
     }
+
 }
 
 
