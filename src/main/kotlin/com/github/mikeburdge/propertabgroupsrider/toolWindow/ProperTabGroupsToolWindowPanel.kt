@@ -71,7 +71,6 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         add(searchField, BorderLayout.NORTH)
         add(JBScrollPane(tree), BorderLayout.CENTER)
 
-        // todo: add listeners
         // document listener
         searchField.addDocumentListener(object : DocumentAdapter() {
             override fun textChanged(e: DocumentEvent) {
