@@ -4,12 +4,17 @@ import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
 import com.intellij.ui.SearchTextField
 import com.intellij.ui.treeStructure.Tree
-import com.sun.xml.bind.v2.TODO
 import java.util.*
 import javax.swing.tree.DefaultMutableTreeNode
 import javax.swing.tree.DefaultTreeModel
+import com.intellij.ui.DocumentAdapter
+import com.intellij.ui.components.JBScrollPane
+import com.intellij.ui.content.ContentManagerEvent
+import java.awt.BorderLayout
+import javax.swing.JPanel
+import javax.swing.event.DocumentEvent
 
-class ProperTabGroupsToolWindowPanel(private val project: Project) {
+class ProperTabGroupsToolWindowPanel(private val project: Project): JPanel(BorderLayout()) {
 
     private sealed class NodeData {
         data class GroupHeader(val id: UUID, val name: String) : NodeData()
@@ -55,10 +60,18 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) {
     init {
         tree.model = treeModel
 
-//        add(searchField, BorderLayout.NORTH)
-//        add(JBScrollPane(tree), BorderLayout.CENTER)
+        add(searchField, BorderLayout.NORTH)
+        add(JBScrollPane(tree), BorderLayout.CENTER)
 
         // todo: add listeners
+        // document listener
+        searchField.addDocumentListener(object : DocumentAdapter() {
+            override fun textChanged(e: DocumentEvent) {
+                filterText = searchField.text
+                rebuildTree()
+            }
+        })
+
         // todo: renderer
         // todo: drag and drop
 
