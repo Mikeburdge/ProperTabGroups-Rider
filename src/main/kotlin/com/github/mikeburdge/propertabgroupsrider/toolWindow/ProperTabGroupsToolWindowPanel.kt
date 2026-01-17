@@ -1,22 +1,28 @@
 package com.github.mikeburdge.propertabgroupsrider.toolWindow
 
+import com.intellij.icons.AllIcons
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.fileEditor.FileEditorManagerEvent
+import com.intellij.openapi.fileEditor.FileEditorManagerListener
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFileManager
+import com.intellij.ui.ColoredTreeCellRenderer
 import com.intellij.ui.SearchTextField
 import com.intellij.ui.treeStructure.Tree
 import java.util.*
 import javax.swing.tree.DefaultMutableTreeNode
 import javax.swing.tree.DefaultTreeModel
 import com.intellij.ui.DocumentAdapter
+import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBScrollPane
-import jdk.internal.org.jline.terminal.MouseEvent
 import java.awt.BorderLayout
 import java.awt.event.MouseAdapter
 import javax.swing.JPanel
+import javax.swing.JTree
 import javax.swing.event.DocumentEvent
 
-class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(BorderLayout()) {
+class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(BorderLayout()), Disposable {
 
     private sealed class NodeData {
         data class GroupHeader(val id: UUID, val name: String) : NodeData()
@@ -71,6 +77,8 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
     init {
         tree.model = treeModel
 
+        tree.cellRenderer = ProperTabTreeRenderer()
+
         add(searchField, BorderLayout.NORTH)
         add(JBScrollPane(tree), BorderLayout.CENTER)
 
@@ -82,10 +90,9 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             }
         })
 
-        tree.addMouseListener(object: MouseAdapter()
-        {
-            override fun mouseClicked(e: MouseEvent) {
-                val path = tree.getPathForLocation(e.x, e.y)?: return
+        tree.addMouseListener(object : MouseAdapter() {
+            override fun mouseClicked(e: java.awt.event.MouseEvent) {
+                val path = tree.getPathForLocation(e.x, e.y) ?: return
                 val node = path.lastPathComponent as? DefaultMutableTreeNode ?: return
                 val data = node.userObject
 
@@ -96,16 +103,66 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             }
         })
 
-        // todo: renderer
+        project.messageBus.connect(this).subscribe(
+            FileEditorManagerListener.FILE_EDITOR_MANAGER,
+            object : FileEditorManagerListener {
+                override fun selectionChanged(event: FileEditorManagerEvent) {
+                    activeFileUrl = event.newFile?.url
+
+                }
+            }
+        )
         // todo: drag and drop
 
         rebuildTree()
     }
 
+    private inner class ProperTabTreeRenderer : ColoredTreeCellRenderer() {
+        override fun customizeCellRenderer(
+            tree: JTree,
+            value: Any?,
+            selected: Boolean,
+            expanded: Boolean,
+            leaf: Boolean,
+            row: Int,
+            hasFocus: Boolean
+        ) {
+            val node = value as? DefaultMutableTreeNode ?: return
+            val data = node.userObject
+
+            when (data) {
+                is NodeData.GroupHeader -> {
+                    icon = AllIcons.Nodes.Folder
+                    append(data.name, SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
+                }
+
+                is NodeData.UnassignedHeader -> {
+                    icon = AllIcons.General.InspectionsOK
+                    append("Unassigned", SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
+                }
+
+                is NodeData.FileItem -> {
+                    icon = AllIcons.FileTypes.Any_type
+                    val bIsActive = data.fileUrl == activeFileUrl
+
+                    val attributes = if (bIsActive)
+                        SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES
+                    else
+                        SimpleTextAttributes.REGULAR_ATTRIBUTES
+
+                    append(data.displayName, attributes)
+                }
+
+                else -> {
+                    append(data?.toString() ?: "", SimpleTextAttributes.REGULAR_ATTRIBUTES)
+                }
+            }
+        }
+    }
+
     private fun rebuildTree() {
 
         rootNode.removeAllChildren()
-
 
         val openFiles = FileEditorManager.getInstance(project).openFiles
 
@@ -146,6 +203,8 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
                     )
                 )
             }
+
+            filterNode(groupNode)?.let { rootNode.add(it) }
         }
 
 
@@ -201,6 +260,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         return if (lastSlash >= 0) trimmed.substring(lastSlash + 1) else trimmed
     }
 
+    override fun dispose() {}
 }
 
 
