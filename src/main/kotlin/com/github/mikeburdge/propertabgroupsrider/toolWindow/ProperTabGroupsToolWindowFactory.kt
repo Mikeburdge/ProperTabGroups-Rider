@@ -1,14 +1,14 @@
 package com.github.mikeburdge.propertabgroupsrider.toolWindow
 
+import com.github.mikeburdge.propertabgroupsrider.MyBundle
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
-import com.intellij.ui.content.ContentFactory
-import com.github.mikeburdge.propertabgroupsrider.MyBundle
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
+import com.intellij.ui.content.ContentFactory
 import java.awt.BorderLayout
 import java.awt.Font
 import javax.swing.BoxLayout
@@ -19,9 +19,10 @@ import javax.swing.JPanel
 class ProperTabGroupsToolWindowFactory : ToolWindowFactory {
 
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
-        val ui = ProperTabGroupsToolWindowUI(project).content
+        val ui = ProperTabGroupsToolWindowPanel(project)
 
         val content = ContentFactory.getInstance().createContent(ui, null, false)
+
         toolWindow.contentManager.addContent(content)
     }
 
