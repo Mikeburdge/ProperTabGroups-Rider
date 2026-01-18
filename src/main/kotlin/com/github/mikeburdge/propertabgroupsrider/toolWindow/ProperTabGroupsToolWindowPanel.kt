@@ -21,6 +21,7 @@ import java.awt.event.MouseAdapter
 import javax.swing.JPanel
 import javax.swing.JTree
 import javax.swing.event.DocumentEvent
+import javax.swing.tree.TreePath
 
 class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(BorderLayout()), Disposable {
 
@@ -258,6 +259,35 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         val lastSlash =
             maxOf(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\')) // this should handle the last slash issues
         return if (lastSlash >= 0) trimmed.substring(lastSlash + 1) else trimmed
+    }
+
+    private fun selectActiveFileInTree() {
+        val url = activeFileUrl ?: return
+        val path = findTreePathForFileUrl(url)
+        tree.selectionPath = path
+        tree.scrollPathToVisible(path)
+    }
+
+    private fun findTreePathForFileUrl(targetUrl: String): TreePath? {
+        val root = treeModel.root as? DefaultMutableTreeNode ?: return null
+
+        // depth-first search function to find the best tree path
+        fun dfs(node: DefaultMutableTreeNode, path: TreePath): TreePath? {
+            val data = node.userObject
+            if (data is NodeData.FileItem && data.fileUrl == targetUrl) {
+                return path
+            }
+
+            val children = node.children().iterator()
+            while (children.hasNext()) {
+                val child = children.next() as DefaultMutableTreeNode
+                val result = dfs(child, path.pathByAddingChild(child))
+                if (result != null) return result
+            }
+
+            return null
+        }
+        return dfs(root, TreePath(root))
     }
 
     override fun dispose() {}
