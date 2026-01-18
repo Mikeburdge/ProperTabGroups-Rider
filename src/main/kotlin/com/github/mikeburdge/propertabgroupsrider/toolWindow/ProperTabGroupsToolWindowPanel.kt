@@ -2,6 +2,9 @@ package com.github.mikeburdge.propertabgroupsrider.toolWindow
 
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.FileEditorManagerEvent
@@ -18,6 +21,7 @@ import com.intellij.ui.treeStructure.Tree
 import java.awt.BorderLayout
 import java.awt.event.MouseAdapter
 import java.util.*
+import javax.swing.JComponent
 import javax.swing.JPanel
 import javax.swing.JTree
 import javax.swing.SwingUtilities
@@ -83,7 +87,12 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
         tree.cellRenderer = ProperTabTreeRenderer()
 
-        add(searchField, BorderLayout.NORTH)
+        val topBar = JPanel(BorderLayout()).apply {
+            add(searchField, BorderLayout.CENTER)
+            //create toolbar component and place it on the EAST
+        }
+
+        add(topBar, BorderLayout.NORTH)
         add(JBScrollPane(tree), BorderLayout.CENTER)
 
         // document listener
@@ -175,6 +184,47 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         }
     }
 
+    /**********************************************************
+
+                            Components
+
+     ********************************************************/
+
+
+    private fun createToolbar(): JComponent{
+        val group = DefaultActionGroup().apply {
+            add(AddGroupAction())
+            add(DeleteGroupAction())
+        }
+    }
+
+    private inner class AddGroupAction : AnAction(
+        "Add Group",
+        "Create a new group",
+        AllIcons.General.Add
+    ){
+        override fun actionPerformed(p0: AnActionEvent) {
+            TODO("Make a function for creating groups")
+        }
+    }
+
+    private inner class DeleteGroupAction : AnAction(
+        "Delete Group",
+        "Delete selected group",
+        AllIcons.General.Remove
+    ){
+        override fun actionPerformed(p0: AnActionEvent) {
+            TODO("Make a function for deleting groups")
+        }
+
+        override fun update(e: AnActionEvent) {
+            TODO("make a function to get selected node data and then enable it.")
+        }
+    }
+
+
+
+
     private fun rebuildTree() {
 
         rootNode.removeAllChildren()
@@ -182,7 +232,9 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         val openFiles = FileEditorManager.getInstance(project).openFiles
 
         val unassignedNode = DefaultMutableTreeNode(NodeData.UnassignedHeader)
-        val unassignedFiles = openFiles.filter { file -> membershipMappingByUrl[file.url].isNullOrEmpty() }
+        val unassignedFiles = openFiles.filter { file ->
+            membershipMappingByUrl[file.url].isNullOrEmpty()
+        }
 
         // handle unassigned tabs
         for (file in unassignedFiles) {
