@@ -2,25 +2,28 @@ package com.github.mikeburdge.propertabgroupsrider.toolWindow
 
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.FileEditorManagerEvent
 import com.intellij.openapi.fileEditor.FileEditorManagerListener
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.ui.ColoredTreeCellRenderer
-import com.intellij.ui.SearchTextField
-import com.intellij.ui.treeStructure.Tree
-import java.util.*
-import javax.swing.tree.DefaultMutableTreeNode
-import javax.swing.tree.DefaultTreeModel
 import com.intellij.ui.DocumentAdapter
+import com.intellij.ui.SearchTextField
 import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBScrollPane
+import com.intellij.ui.treeStructure.Tree
 import java.awt.BorderLayout
 import java.awt.event.MouseAdapter
+import java.util.*
 import javax.swing.JPanel
 import javax.swing.JTree
+import javax.swing.SwingUtilities
 import javax.swing.event.DocumentEvent
+import javax.swing.tree.DefaultMutableTreeNode
+import javax.swing.tree.DefaultTreeModel
 import javax.swing.tree.TreePath
 
 class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(BorderLayout()), Disposable {
@@ -107,6 +110,16 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         project.messageBus.connect(this).subscribe(
             FileEditorManagerListener.FILE_EDITOR_MANAGER,
             object : FileEditorManagerListener {
+
+                override fun fileOpened(source: FileEditorManager, file: VirtualFile) {
+                    scheduleRebuildTree()
+                }
+
+                override fun fileClosed(source: FileEditorManager, file: VirtualFile) {
+                    scheduleRebuildTree()
+                }
+
+
                 override fun selectionChanged(event: FileEditorManagerEvent) {
                     activeFileUrl = event.newFile?.url
                     selectActiveFileInTree()
@@ -267,6 +280,16 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         val path = findTreePathForFileUrl(url)
         tree.selectionPath = path
         tree.scrollPathToVisible(path)
+    }
+
+    private fun scheduleRebuildTree() {
+        if (SwingUtilities.isEventDispatchThread()) {
+            rebuildTree()
+        } else {
+            ApplicationManager.getApplication().invokeLater {
+                rebuildTree()
+            }
+        }
     }
 
     private fun findTreePathForFileUrl(targetUrl: String): TreePath? {
