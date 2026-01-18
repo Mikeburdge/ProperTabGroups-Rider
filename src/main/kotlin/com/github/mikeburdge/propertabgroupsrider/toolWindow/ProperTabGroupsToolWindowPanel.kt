@@ -11,16 +11,18 @@ import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.FileEditorManagerEvent
 import com.intellij.openapi.fileEditor.FileEditorManagerListener
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.VirtualFileManager
-import com.intellij.ui.ColoredTreeCellRenderer
-import com.intellij.ui.DocumentAdapter
-import com.intellij.ui.SearchTextField
-import com.intellij.ui.SimpleTextAttributes
+import com.intellij.ui.*
+import com.intellij.ui.components.JBCheckBox
+import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.treeStructure.Tree
+import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
 import java.awt.Component
+import java.awt.Dimension
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.util.*
@@ -196,15 +198,15 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
             override fun isCellEditable(e: EventObject?): Boolean {
 
-                if (allowProgrammaticRenameOnce)
-                {
+                if (allowProgrammaticRenameOnce) {
                     allowProgrammaticRenameOnce = false
                     return true
                 }
 
                 val mouseEvent = e as? MouseEvent ?: return false
                 if (mouseEvent.clickCount != 2) return false
-                val path = this@ProperTabGroupsToolWindowPanel.tree.getPathForLocation(mouseEvent.x, mouseEvent.y) ?: return false
+                val path = this@ProperTabGroupsToolWindowPanel.tree.getPathForLocation(mouseEvent.x, mouseEvent.y)
+                    ?: return false
                 val selectedNode = tree.lastSelectedPathComponent as? DefaultMutableTreeNode ?: return false
                 val data = selectedNode.userObject as? NodeData.GroupHeader ?: return false
 
@@ -219,7 +221,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         path: TreePath,
         group: NodeData.GroupHeader,
         e: MouseEvent
-    ) : Boolean {
+    ): Boolean {
         val bounds = tree.getPathBounds(path) ?: return false
 
         val iconWidth = 16
@@ -302,7 +304,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             add(AddGroupAction())
             add(DeleteGroupAction())
             addSeparator()
-
+            add()
         }
         val toolbar = ActionManager.getInstance().createActionToolbar("ProperTabGroupsToolbar", group, true)
 
@@ -335,6 +337,72 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         }
     }
 
+    private inner class AssignGroupsAction : AnAction(
+        "Assign to Groups...",
+        "Add this tab to one or more groups",
+        AllIcons.Actions.Edit
+    ) {
+
+    }
+
+    private fun showAssignGroupsPopupForSelectedTab() {
+        val selected = getSelectedNodeData() as? NodeData.FileItem ?: return
+        val current = membershipMappingByUrl[selected.fileUrl] ?: emptySet()
+
+        val popup =
+
+    }
+
+    private class AssignGroupsPopup(
+        project: Project,
+        private val fileName: String,
+        private val groups: List<Group>,
+        initialSelection: Set<UUID>
+    ) : DialogWrapper(project, true) {
+        private val checkBoxes: Map<UUID, JBCheckBox> =
+            groups.associate { it.id to JBCheckBox(it.name, initialSelection.contains(it.id)) }
+
+        var selectedGroupIds: Set<UUID> = emptySet()
+
+        init {
+            title = "Assign \"$fileName\" to Groups"
+            init()
+        }
+
+
+        override fun createCenterPanel(): JComponent {
+            val root = JPanel(BorderLayout(0, 10)).apply {
+                border = JBUI.Borders.empty(10)
+            }
+
+            root.add(JBLabel("Select the groups this tab should be assigned to:"), BorderLayout.NORTH)
+
+            val listPanel = JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            }
+
+            groups.forEach { g ->
+                listPanel.add(checkBoxes[g.id])
+            }
+
+            val scroll = JBScrollPane(listPanel).apply {
+                preferredSize = Dimension(360, 240)
+            }
+
+            root.add(scroll, BorderLayout.CENTER)
+
+            val hint = JBLabel("Leave everything unchecked for Unassigned").apply {
+                foreground = JBColor.GRAY
+            }
+            root.add(hint, BorderLayout.SOUTH)
+
+            return root
+        }
+
+
+
+
+    }
 
     private var allowProgrammaticRenameOnce = false
 
