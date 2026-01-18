@@ -20,15 +20,15 @@ import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.treeStructure.Tree
 import java.awt.BorderLayout
+import java.awt.Component
 import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
 import java.util.*
-import javax.swing.JComponent
-import javax.swing.JPanel
-import javax.swing.JTree
-import javax.swing.SwingUtilities
+import javax.swing.*
 import javax.swing.event.DocumentEvent
 import javax.swing.tree.DefaultMutableTreeNode
 import javax.swing.tree.DefaultTreeModel
+import javax.swing.tree.TreeCellEditor
 import javax.swing.tree.TreePath
 
 class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(BorderLayout()), Disposable {
@@ -66,7 +66,23 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
     )
 
     private val rootNode = DefaultMutableTreeNode("root")
-    private val treeModel = DefaultTreeModel(rootNode)
+    private val treeModel = object : DefaultTreeModel(rootNode) {
+        override fun valueForPathChanged(path: TreePath, newValue: Any) {
+            val node = path.lastPathComponent as? DefaultMutableTreeNode ?: return
+            val data = node.userObject
+
+            if (data is NodeData.GroupHeader) {
+                val trimmed = newValue?.toString()?.trim().orEmpty()
+                if (trimmed.isNotBlank()) {
+                    renameGroup(data.id, trimmed)
+                } else {
+                    rebuildTree()
+                }
+            }
+
+
+        }
+    }
 
     private var filterText: String = ""
 
@@ -83,14 +99,18 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         com.intellij.ui.TreeUIHelper.getInstance().installTreeSpeedSearch(this)
     }
 
+    private val toolbarComponent: JComponent = createToolbar()
+
     init {
         tree.model = treeModel
 
         tree.cellRenderer = ProperTabTreeRenderer()
 
+        installInlineGroupRenaming()
+
         val topBar = JPanel(BorderLayout()).apply {
             add(searchField, BorderLayout.CENTER)
-            add(createToolbar(), BorderLayout.NORTH)
+            add(toolbarComponent, BorderLayout.EAST)
         }
 
         add(topBar, BorderLayout.NORTH)
@@ -142,6 +162,91 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         rebuildTree()
     }
 
+    // essentially we're allowing the tree to allow groups to be renamed. this is probably a bit funky but ah well
+    private fun installInlineGroupRenaming() {
+        tree.isEditable = true
+        tree.invokesStopCellEditing = true
+
+        tree.cellEditor = object : AbstractCellEditor(), TreeCellEditor {
+            private val field = JTextField()
+
+            override fun getTreeCellEditorComponent(
+                tree: JTree?,
+                value: Any?,
+                isSelected: Boolean,
+                expanded: Boolean,
+                leaf: Boolean,
+                row: Int
+            ): Component? {
+                val node = value as? DefaultMutableTreeNode
+                val data = node?.userObject as? NodeData.GroupHeader
+
+                field.text = data?.name ?: ""
+
+                SwingUtilities.invokeLater {
+                    field.selectAll()
+                    field.requestFocusInWindow()
+                }
+                return field
+            }
+
+            override fun getCellEditorValue(): Any? {
+                return field.text
+            }
+
+            override fun isCellEditable(e: EventObject?): Boolean {
+
+                if (allowProgrammaticRenameOnce)
+                {
+                    allowProgrammaticRenameOnce = false
+                    return true
+                }
+
+                val mouseEvent = e as? MouseEvent ?: return false
+                if (mouseEvent.clickCount != 2) return false
+                val path = this@ProperTabGroupsToolWindowPanel.tree.getPathForLocation(mouseEvent.x, mouseEvent.y) ?: return false
+                val selectedNode = tree.lastSelectedPathComponent as? DefaultMutableTreeNode ?: return false
+                val data = selectedNode.userObject as? NodeData.GroupHeader ?: return false
+
+                return isClickOnGroupText(path, data, mouseEvent)
+            }
+        }
+    }
+
+    //  ok so I found this online, hopefully it works. I imagine its going to fail when people zoom in and zoom out,
+    //  so I might scrap this feature or find a more solid way of doing it
+    private fun isClickOnGroupText(
+        path: TreePath,
+        group: NodeData.GroupHeader,
+        e: MouseEvent
+    ) : Boolean {
+        val bounds = tree.getPathBounds(path) ?: return false
+
+        val iconWidth = 16
+        val gap = 4
+
+        val textStartX = bounds.x + iconWidth + gap
+
+        val fm = tree.getFontMetrics(tree.font)
+        val textWidth = fm.stringWidth(group.name)
+        val textEndX = textStartX + textWidth
+
+        return e.x in textStartX..textEndX
+    }
+
+    private fun renameGroup(groupId: UUID, newName: String) {
+        val index = groups.indexOfFirst { it.id == groupId }
+        if (index < 0) return
+        groups[index] = groups[index].copy(name = newName)
+
+        rebuildTree()
+
+        findTreePathForGroupId(groupId)?.let { path ->
+            tree.selectionPath = path
+            tree.scrollPathToVisible(path)
+        }
+    }
+
     private inner class ProperTabTreeRenderer : ColoredTreeCellRenderer() {
         override fun customizeCellRenderer(
             tree: JTree,
@@ -187,15 +292,17 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
     /**********************************************************
 
-                            Components
+    Components
 
      ********************************************************/
 
 
-    private fun createToolbar(): JComponent{
+    private fun createToolbar(): JComponent {
         val group = DefaultActionGroup().apply {
             add(AddGroupAction())
             add(DeleteGroupAction())
+            addSeparator()
+
         }
         val toolbar = ActionManager.getInstance().createActionToolbar("ProperTabGroupsToolbar", group, true)
 
@@ -207,9 +314,9 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         "Add Group",
         "Create a new group",
         AllIcons.General.Add
-    ){
+    ) {
         override fun actionPerformed(p0: AnActionEvent) {
-            TODO("Make a function for creating groups")
+            addNewGroupAndRename()
         }
     }
 
@@ -217,18 +324,52 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         "Delete Group",
         "Delete selected group",
         AllIcons.General.Remove
-    ){
+    ) {
         override fun actionPerformed(p0: AnActionEvent) {
-            TODO("Make a function for deleting groups")
+            deleteSelectedGroup()
         }
 
         override fun update(e: AnActionEvent) {
-            TODO("make a function to get selected node data and then enable it.")
+            val selected = getSelectedNodeData()
+            e.presentation.isEnabled = selected is NodeData.GroupHeader
         }
     }
 
 
+    private var allowProgrammaticRenameOnce = false
 
+    private fun addNewGroupAndRename() {
+        val newGroup = Group(UUID.randomUUID(), "New Group")
+        groups.add(newGroup)
+
+        rebuildTree()
+
+        val path = findTreePathForGroupId(newGroup.id) ?: return
+        tree.selectionPath = path
+        tree.scrollPathToVisible(path)
+        SwingUtilities.invokeLater {
+            allowProgrammaticRenameOnce = true
+            tree.requestFocusInWindow()
+            tree.startEditingAtPath(path)
+        }
+    }
+
+    private fun deleteSelectedGroup() {
+        val selected = getSelectedNodeData() as? NodeData.GroupHeader ?: return
+
+        groups.removeIf { it.id == selected.id }
+        for ((_, set) in membershipMappingByUrl) {
+            set.remove(selected.id)
+        }
+
+        rebuildTree()
+    }
+
+    private fun getSelectedNodeData(): NodeData? {
+        val node = tree.lastSelectedPathComponent as? DefaultMutableTreeNode ?: return null
+
+        return node.userObject as? NodeData
+    }
 
     private fun rebuildTree() {
 
@@ -335,6 +476,13 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
     private fun selectActiveFileInTree() {
         val url = activeFileUrl ?: return
         val path = findTreePathForFileUrl(url)
+
+
+        if (path == null) {
+            tree.clearSelection()
+            return
+        }
+
         tree.selectionPath = path
         tree.scrollPathToVisible(path)
     }
@@ -356,6 +504,28 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         fun dfs(node: DefaultMutableTreeNode, path: TreePath): TreePath? {
             val data = node.userObject
             if (data is NodeData.FileItem && data.fileUrl == targetUrl) {
+                return path
+            }
+
+            val children = node.children().iterator()
+            while (children.hasNext()) {
+                val child = children.next() as DefaultMutableTreeNode
+                val result = dfs(child, path.pathByAddingChild(child))
+                if (result != null) return result
+            }
+
+            return null
+        }
+        return dfs(root, TreePath(root))
+    }
+
+    private fun findTreePathForGroupId(groupId: UUID): TreePath? {
+        val root = treeModel.root as? DefaultMutableTreeNode ?: return null
+
+        // depth-first search function to find the best tree path
+        fun dfs(node: DefaultMutableTreeNode, path: TreePath): TreePath? {
+            val data = node.userObject
+            if (data is NodeData.GroupHeader && data.id == groupId) {
                 return path
             }
 
