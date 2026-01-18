@@ -40,9 +40,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         data object UnassignedHeader : NodeData()
 
         data class FileItem(
-            val fileUrl: String,
-            val displayName: String,
-            val parentGroupId: UUID? // null means unassigned
+            val fileUrl: String, val displayName: String, val parentGroupId: UUID? // null means unassigned
         ) : NodeData()
     }
 
@@ -63,8 +61,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
     )
 
     private val demoUnassigned = listOf(
-        "main.cpp",
-        "Test.cpp"
+        "main.cpp", "Test.cpp"
     )
 
     private val rootNode = DefaultMutableTreeNode("root")
@@ -140,8 +137,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         })
 
         project.messageBus.connect(this).subscribe(
-            FileEditorManagerListener.FILE_EDITOR_MANAGER,
-            object : FileEditorManagerListener {
+            FileEditorManagerListener.FILE_EDITOR_MANAGER, object : FileEditorManagerListener {
 
                 override fun fileOpened(source: FileEditorManager, file: VirtualFile) {
                     scheduleRebuildTree()
@@ -157,8 +153,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
                     selectActiveFileInTree()
                     tree.repaint()
                 }
-            }
-        )
+            })
         // todo: drag and drop
 
         rebuildTree()
@@ -173,12 +168,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             private val field = JTextField()
 
             override fun getTreeCellEditorComponent(
-                tree: JTree?,
-                value: Any?,
-                isSelected: Boolean,
-                expanded: Boolean,
-                leaf: Boolean,
-                row: Int
+                tree: JTree?, value: Any?, isSelected: Boolean, expanded: Boolean, leaf: Boolean, row: Int
             ): Component? {
                 val node = value as? DefaultMutableTreeNode
                 val data = node?.userObject as? NodeData.GroupHeader
@@ -218,9 +208,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
     //  ok so I found this online, hopefully it works. I imagine its going to fail when people zoom in and zoom out,
     //  so I might scrap this feature or find a more solid way of doing it
     private fun isClickOnGroupText(
-        path: TreePath,
-        group: NodeData.GroupHeader,
-        e: MouseEvent
+        path: TreePath, group: NodeData.GroupHeader, e: MouseEvent
     ): Boolean {
         val bounds = tree.getPathBounds(path) ?: return false
 
@@ -251,13 +239,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
     private inner class ProperTabTreeRenderer : ColoredTreeCellRenderer() {
         override fun customizeCellRenderer(
-            tree: JTree,
-            value: Any?,
-            selected: Boolean,
-            expanded: Boolean,
-            leaf: Boolean,
-            row: Int,
-            hasFocus: Boolean
+            tree: JTree, value: Any?, selected: Boolean, expanded: Boolean, leaf: Boolean, row: Int, hasFocus: Boolean
         ) {
             val node = value as? DefaultMutableTreeNode ?: return
             val data = node.userObject
@@ -277,10 +259,8 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
                     icon = AllIcons.FileTypes.Any_type
                     val bIsActive = data.fileUrl == activeFileUrl
 
-                    val attributes = if (bIsActive)
-                        SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES
-                    else
-                        SimpleTextAttributes.REGULAR_ATTRIBUTES
+                    val attributes = if (bIsActive) SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES
+                    else SimpleTextAttributes.REGULAR_ATTRIBUTES
 
                     append(data.displayName, attributes)
                 }
@@ -304,7 +284,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             add(AddGroupAction())
             add(DeleteGroupAction())
             addSeparator()
-            add()
+            add(AssignGroupsAction())
         }
         val toolbar = ActionManager.getInstance().createActionToolbar("ProperTabGroupsToolbar", group, true)
 
@@ -313,9 +293,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
     }
 
     private inner class AddGroupAction : AnAction(
-        "Add Group",
-        "Create a new group",
-        AllIcons.General.Add
+        "Add Group", "Create a new group", AllIcons.General.Add
     ) {
         override fun actionPerformed(p0: AnActionEvent) {
             addNewGroupAndRename()
@@ -323,9 +301,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
     }
 
     private inner class DeleteGroupAction : AnAction(
-        "Delete Group",
-        "Delete selected group",
-        AllIcons.General.Remove
+        "Delete Group", "Delete selected group", AllIcons.General.Remove
     ) {
         override fun actionPerformed(p0: AnActionEvent) {
             deleteSelectedGroup()
@@ -342,22 +318,40 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         "Add this tab to one or more groups",
         AllIcons.Actions.Edit
     ) {
+        override fun actionPerformed(p0: AnActionEvent) {
+            showAssignGroupsPopupForSelectedTab()
+        }
 
+        override fun update(e: AnActionEvent) {
+            e.presentation.isEnabled = getSelectedNodeData() is NodeData.FileItem
+        }
     }
 
     private fun showAssignGroupsPopupForSelectedTab() {
         val selected = getSelectedNodeData() as? NodeData.FileItem ?: return
         val current = membershipMappingByUrl[selected.fileUrl] ?: emptySet()
 
-        val popup =
+        val popup = AssignGroupsPopup(
+            project = project, fileName = selected.displayName, groups = groups.toList(), initialSelection = current
+        )
 
+        if (!popup.showAndGet()) {
+            return
+        }
+
+        val chosen = popup.selectedGroupIds
+
+        if (chosen.isEmpty()) {
+            membershipMappingByUrl.remove(selected.fileUrl)
+        } else {
+            membershipMappingByUrl[selected.fileUrl] = chosen.toMutableSet()
+        }
+
+        rebuildTree()
     }
 
     private class AssignGroupsPopup(
-        project: Project,
-        private val fileName: String,
-        private val groups: List<Group>,
-        initialSelection: Set<UUID>
+        project: Project, private val fileName: String, private val groups: List<Group>, initialSelection: Set<UUID>
     ) : DialogWrapper(project, true) {
         private val checkBoxes: Map<UUID, JBCheckBox> =
             groups.associate { it.id to JBCheckBox(it.name, initialSelection.contains(it.id)) }
@@ -399,9 +393,11 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             return root
         }
 
+        override fun doOKAction() {
+            selectedGroupIds = checkBoxes.filterValues { it.isSelected }.keys
 
-
-
+            super.doOKAction()
+        }
     }
 
     private var allowProgrammaticRenameOnce = false
@@ -455,9 +451,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             unassignedNode.add(
                 DefaultMutableTreeNode(
                     NodeData.FileItem(
-                        fileUrl = file.url,
-                        displayName = file.name,
-                        parentGroupId = null
+                        fileUrl = file.url, displayName = file.name, parentGroupId = null
                     )
                 )
             )
@@ -477,9 +471,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
                 groupNode.add(
                     DefaultMutableTreeNode(
                         NodeData.FileItem(
-                            fileUrl = url,
-                            displayName = displayNameFromUrl(url),
-                            parentGroupId = group.id
+                            fileUrl = url, displayName = displayNameFromUrl(url), parentGroupId = group.id
                         )
                     )
                 )
