@@ -109,7 +109,8 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             object : FileEditorManagerListener {
                 override fun selectionChanged(event: FileEditorManagerEvent) {
                     activeFileUrl = event.newFile?.url
-
+                    selectActiveFileInTree()
+                    tree.repaint()
                 }
             }
         )
