@@ -53,17 +53,6 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
     private val membershipMappingByUrl: MutableMap<String, MutableSet<UUID>> = mutableMapOf()
 
-    private data class GroupItem(val name: String, val tabs: List<String>)
-
-    private val demoGroups = listOf(
-        GroupItem("Gameplay", listOf("playerController.h", "playerController.cpp", "Movement.h", "Movement.cpp")),
-        GroupItem("UI", listOf("HUD.xaml", "Inventory.xaml")),
-    )
-
-    private val demoUnassigned = listOf(
-        "main.cpp", "Test.cpp"
-    )
-
     private val rootNode = DefaultMutableTreeNode("root")
     private val treeModel = object : DefaultTreeModel(rootNode) {
         override fun valueForPathChanged(path: TreePath, newValue: Any) {
@@ -95,7 +84,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
         emptyText.text = "toolWindow.empty"
 
-        com.intellij.ui.TreeUIHelper.getInstance().installTreeSpeedSearch(this)
+        TreeUIHelper.getInstance().installTreeSpeedSearch(this)
     }
 
     private val toolbarComponent: JComponent = createToolbar()
@@ -124,7 +113,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         })
 
         tree.addMouseListener(object : MouseAdapter() {
-            override fun mouseClicked(e: java.awt.event.MouseEvent) {
+            override fun mouseClicked(e: MouseEvent) {
                 val path = tree.getPathForLocation(e.x, e.y) ?: return
                 val node = path.lastPathComponent as? DefaultMutableTreeNode ?: return
                 val data = node.userObject
@@ -169,7 +158,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
             override fun getTreeCellEditorComponent(
                 tree: JTree?, value: Any?, isSelected: Boolean, expanded: Boolean, leaf: Boolean, row: Int
-            ): Component? {
+            ): Component {
                 val node = value as? DefaultMutableTreeNode
                 val data = node?.userObject as? NodeData.GroupHeader
 
@@ -278,7 +267,6 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
      ********************************************************/
 
-
     private fun createToolbar(): JComponent {
         val group = DefaultActionGroup().apply {
             add(AddGroupAction())
@@ -351,7 +339,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
     }
 
     private class AssignGroupsPopup(
-        project: Project, private val fileName: String, private val groups: List<Group>, initialSelection: Set<UUID>
+        project: Project, fileName: String, private val groups: List<Group>, initialSelection: Set<UUID>
     ) : DialogWrapper(project, true) {
         private val checkBoxes: Map<UUID, JBCheckBox> =
             groups.associate { it.id to JBCheckBox(it.name, initialSelection.contains(it.id)) }
@@ -400,6 +388,74 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         }
     }
 
+
+    private data class ExpansionState(
+        val expandedGroupIds: Set<UUID>,
+        val unassignedExpanded: Boolean
+    )
+
+    private fun recordExpansionState(): ExpansionState {
+        val expandedGroups = mutableSetOf<UUID>()
+        var unassignedExpanded = false
+        val rootPath = TreePath(rootNode)
+        val expanded = tree.getExpandedDescendants(rootPath) ?: return ExpansionState(emptySet(), false)
+
+        val it = expanded.iterator()
+        while (it.hasNext()) {
+            val path = it.next()
+            val node = path.lastPathComponent as? DefaultMutableTreeNode ?: continue
+
+            when (val data = node.userObject) {
+                is NodeData.GroupHeader -> expandedGroups.add(data.id)
+                is NodeData.UnassignedHeader -> unassignedExpanded = true
+            }
+        }
+
+        return ExpansionState(expandedGroups, unassignedExpanded)
+    }
+
+    private fun restoreExpansionState(state: ExpansionState, forceExpandGroupId: UUID? = null) {
+        if (state.unassignedExpanded) {
+            findTreePathForUnassigned()?.let {
+                tree.expandPath(it)
+            }
+        }
+
+        for (id in state.expandedGroupIds) {
+            findTreePathForGroupId(id)?.let {
+                tree.expandPath(it)
+            }
+        }
+
+        // I think when I get a settings menu going, I'll put this in the settings: Do we want to auto-expand the
+        // collapsed groups when they have a tab added to them?
+        forceExpandGroupId?.let { id ->
+            findTreePathForGroupId(id)?.let {
+                tree.expandPath(it)
+            }
+        }
+    }
+
+    private fun findTreePathForUnassigned(): TreePath? {
+        val root = treeModel.root as? DefaultMutableTreeNode ?: return null
+
+        fun dfs(node: DefaultMutableTreeNode, path: TreePath): TreePath? {
+            if (node.userObject is NodeData.UnassignedHeader) {
+                return path
+            }
+
+            val children = node.children().iterator()
+            while (children.hasNext()) {
+                val child = children.next() as DefaultMutableTreeNode
+                val result = dfs(child, path.pathByAddingChild(child))
+                if (result != null) return result
+            }
+
+            return null
+        }
+        return dfs(root, TreePath(root))
+    }
+
     private var allowProgrammaticRenameOnce = false
 
     private fun addNewGroupAndRename() {
@@ -435,7 +491,9 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         return node.userObject as? NodeData
     }
 
-    private fun rebuildTree() {
+    private fun rebuildTree(forceExpandGroupId: UUID? = null) {
+
+        val expansionState = recordExpansionState()
 
         rootNode.removeAllChildren()
 
@@ -483,7 +541,10 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
         treeModel.reload()
 
-        // I think this is where I would sort the expansion of the header out.
+
+        SwingUtilities.invokeLater {
+            restoreExpansionState(expansionState, forceExpandGroupId)
+        }
 
         // this is also probably where I highlight/ select the active tab
     }
