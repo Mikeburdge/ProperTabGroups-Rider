@@ -2,6 +2,7 @@ package com.github.mikeburdge.propertabgroupsrider.toolWindow
 
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
@@ -89,7 +90,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
         val topBar = JPanel(BorderLayout()).apply {
             add(searchField, BorderLayout.CENTER)
-            //create toolbar component and place it on the EAST
+            add(createToolbar(), BorderLayout.NORTH)
         }
 
         add(topBar, BorderLayout.NORTH)
@@ -196,6 +197,10 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             add(AddGroupAction())
             add(DeleteGroupAction())
         }
+        val toolbar = ActionManager.getInstance().createActionToolbar("ProperTabGroupsToolbar", group, true)
+
+        toolbar.targetComponent = this
+        return toolbar.component
     }
 
     private inner class AddGroupAction : AnAction(
