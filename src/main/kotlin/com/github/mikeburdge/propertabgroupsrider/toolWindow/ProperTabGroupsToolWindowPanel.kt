@@ -25,6 +25,7 @@ import java.awt.Component
 import java.awt.Dimension
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import java.awt.event.MouseMotionAdapter
 import java.util.*
 import javax.swing.*
 import javax.swing.event.DocumentEvent
@@ -45,6 +46,10 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
     }
 
     private data class Group(val id: UUID, val name: String)
+
+    // used to choose which file of the ones in every group I want to highlight (it will be the most recently clicked)
+    private var preferredActiveLocation: Pair<String, UUID?>? = null
+    private var hoveredTab: Pair<String, UUID?>? = null
 
     private val groups: MutableList<Group> = mutableListOf(
         Group(UUID.randomUUID(), "Gameplay"),
@@ -95,6 +100,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         tree.cellRenderer = ProperTabTreeRenderer()
 
         installInlineGroupRenaming()
+        installRemoveHoverTracking()
 
         val topBar = JPanel(BorderLayout()).apply {
             add(searchField, BorderLayout.CENTER)
@@ -114,13 +120,38 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
         tree.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
+
+                if (e.button != MouseEvent.BUTTON1) {
+                    return
+                }
+
                 val path = tree.getPathForLocation(e.x, e.y) ?: return
                 val node = path.lastPathComponent as? DefaultMutableTreeNode ?: return
                 val data = node.userObject
 
+                if (e.clickCount == 1 && data is NodeData.FileItem) {
+                    val bIsHovered = hoveredTab == (data.fileUrl to data.parentGroupId)
+                    if (bIsHovered && data.parentGroupId != null && isClickOnRemoveX(path, data, e))
+                    {
+                        removeFileFromGroup(data.fileUrl, data.parentGroupId)
+                    }
+                }
+
                 if (data is NodeData.FileItem) {
+                    preferredActiveLocation =
+                        data.fileUrl to data.parentGroupId // store the last item and group we clicked
+
                     val virtualFile = VirtualFileManager.getInstance().findFileByUrl(data.fileUrl) ?: return
                     FileEditorManager.getInstance(project).openFile(virtualFile, true)
+                }
+            }
+
+            private fun removeFileFromGroup(fileUrl: String, groupId: UUID) {
+                membershipMappingByUrl[fileUrl]?.remove(groupId)
+
+                if (membershipMappingByUrl[fileUrl]?.isEmpty() == true)
+                {
+                    membershipMappingByUrl.remove(fileUrl)
                 }
             }
         })
@@ -146,6 +177,36 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         // todo: drag and drop
 
         rebuildTree()
+    }
+
+    private fun installRemoveHoverTracking() {
+        tree.addMouseMotionListener(object : MouseMotionAdapter() {
+            override fun mouseMoved(e: MouseEvent) {
+                val path = tree.getPathForLocation(e.x, e.y)
+                val node = path?.lastPathComponent as? DefaultMutableTreeNode
+                val data = node?.userObject
+
+                val new = if (data is NodeData.FileItem) {
+                    data.fileUrl to data.parentGroupId
+                } else {
+                    null
+                }
+
+                if (hoveredTab != new) {
+                    hoveredTab = new
+                    tree.repaint()
+                }
+            }
+        })
+
+        tree.addMouseListener(object : MouseAdapter() {
+            override fun mouseExited(e: MouseEvent?) {
+                if (hoveredTab != null) {
+                    hoveredTab = null
+                    tree.repaint()
+                }
+            }
+        })
     }
 
     // essentially we're allowing the tree to allow groups to be renamed. this is probably a bit funky but ah well
@@ -213,6 +274,28 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         return e.x in textStartX..textEndX
     }
 
+    // if the above hack is fine then so is this lol
+    private fun isClickOnRemoveX(path: TreePath, item: NodeData.FileItem, e: MouseEvent): Boolean {
+        val bounds = tree.getPathBounds(path) ?: return false
+
+        val iconWidth = 16
+        val gap = 4
+        val gapBeforeRemove = 12
+
+        val fm = tree.getFontMetrics(tree.font)
+
+        val textStartX = bounds.x + iconWidth + gap
+        val textWidth = fm.stringWidth(item.displayName)
+
+        val removeText = "✕"
+        val removeWidth = fm.stringWidth(removeText)
+
+        val removeStartX = textStartX + textWidth + gap
+        val removeEndX = removeStartX + removeWidth
+
+        return e.x in removeStartX..removeEndX
+    }
+
     private fun renameGroup(groupId: UUID, newName: String) {
         val index = groups.indexOfFirst { it.id == groupId }
         if (index < 0) return
@@ -245,19 +328,48 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
                 }
 
                 is NodeData.FileItem -> {
-                    icon = AllIcons.FileTypes.Any_type
                     val bIsActive = data.fileUrl == activeFileUrl
 
-                    val attributes = if (bIsActive) SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES
-                    else SimpleTextAttributes.REGULAR_ATTRIBUTES
+                    val baseIcon = AllIcons.FileTypes.Any_type
+                    icon = if (bIsActive) {
+                        badgeIcon(baseIcon, AllIcons.Actions.Checked)
+                    } else {
+                        baseIcon
+                    }
+
+                    val attributes = if (bIsActive) {
+                        SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES
+                    } else {
+                        SimpleTextAttributes.REGULAR_ATTRIBUTES
+                    }
+
+                    if (bIsActive) {
+                        append(
+                            "▶ ",
+                            SimpleTextAttributes.REGULAR_ATTRIBUTES
+                        ) // Apparently it accepts ascii text for this lol
+                    }
 
                     append(data.displayName, attributes)
+
+                    val bIsHovered = hoveredTab == (data.fileUrl to data.parentGroupId)
+                    val bCanRemove = data.parentGroupId != null
+                    if (bIsHovered && bCanRemove) {
+                        append("   ✕", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                    }
                 }
 
                 else -> {
                     append(data?.toString() ?: "", SimpleTextAttributes.REGULAR_ATTRIBUTES)
                 }
             }
+        }
+
+        private fun badgeIcon(base: Icon, badge: Icon): Icon {
+            val layered = LayeredIcon(2)
+            layered.setIcon(base, 0)
+            layered.setIcon(badge, 1) // overlay
+            return layered
         }
     }
 
@@ -497,27 +609,6 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
         rootNode.removeAllChildren()
 
-        val openFiles = FileEditorManager.getInstance(project).openFiles
-
-        val unassignedNode = DefaultMutableTreeNode(NodeData.UnassignedHeader)
-        val unassignedFiles = openFiles.filter { file ->
-            membershipMappingByUrl[file.url].isNullOrEmpty()
-        }
-
-        // handle unassigned tabs
-        for (file in unassignedFiles) {
-            unassignedNode.add(
-                DefaultMutableTreeNode(
-                    NodeData.FileItem(
-                        fileUrl = file.url, displayName = file.name, parentGroupId = null
-                    )
-                )
-            )
-        }
-
-        // filter unassigned. replaced the if statement with a "safe access expression"
-        filterNode(unassignedNode)?.let { rootNode.add(it) }
-
         // handle member tabs
         for (group in groups) {
             val groupNode = DefaultMutableTreeNode(NodeData.GroupHeader(group.id, group.name))
@@ -538,6 +629,26 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             filterNode(groupNode)?.let { rootNode.add(it) }
         }
 
+        val openFiles = FileEditorManager.getInstance(project).openFiles
+
+        val unassignedNode = DefaultMutableTreeNode(NodeData.UnassignedHeader)
+        val unassignedFiles = openFiles.filter { file ->
+            membershipMappingByUrl[file.url].isNullOrEmpty()
+        }
+
+        // handle unassigned tabs
+        for (file in unassignedFiles) {
+            unassignedNode.add(
+                DefaultMutableTreeNode(
+                    NodeData.FileItem(
+                        fileUrl = file.url, displayName = file.name, parentGroupId = null
+                    )
+                )
+            )
+        }
+
+        // filter unassigned. replaced the if statement with a "safe access expression"
+        filterNode(unassignedNode)?.let { rootNode.add(it) }
 
         treeModel.reload()
 
@@ -596,8 +707,13 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
     private fun selectActiveFileInTree() {
         val url = activeFileUrl ?: return
-        val path = findTreePathForFileUrl(url)
+        val preferred = preferredActiveLocation
 
+        val path = if (preferred != null && preferred.first == url) {
+            findTreePathForGroupId(url, preferred.second) ?: findTreePathForFileUrl(url)
+        } else {
+            findTreePathForFileUrl(url)
+        }
 
         if (path == null) {
             tree.clearSelection()
@@ -607,6 +723,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         tree.selectionPath = path
         tree.scrollPathToVisible(path)
     }
+
 
     private fun scheduleRebuildTree() {
         if (SwingUtilities.isEventDispatchThread()) {
@@ -647,6 +764,27 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         fun dfs(node: DefaultMutableTreeNode, path: TreePath): TreePath? {
             val data = node.userObject
             if (data is NodeData.GroupHeader && data.id == groupId) {
+                return path
+            }
+
+            val children = node.children().iterator()
+            while (children.hasNext()) {
+                val child = children.next() as DefaultMutableTreeNode
+                val result = dfs(child, path.pathByAddingChild(child))
+                if (result != null) return result
+            }
+
+            return null
+        }
+        return dfs(root, TreePath(root))
+    }
+
+    private fun findTreePathForGroupId(url: String, groupId: UUID?): TreePath? {
+        val root = treeModel.root as? DefaultMutableTreeNode ?: return null
+
+        fun dfs(node: DefaultMutableTreeNode, path: TreePath): TreePath? {
+            val data = node.userObject
+            if (data is NodeData.FileItem && data.fileUrl == url && data.parentGroupId == groupId) {
                 return path
             }
 
