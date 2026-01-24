@@ -125,19 +125,33 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
                     return
                 }
 
-                val path = tree.getPathForLocation(e.x, e.y) ?: return
+                val closestRow = tree.getClosestRowForLocation(e.x, e.y)
+                if (closestRow < 0) {
+                    return
+                }
+
+                val rowBounds = tree.getRowBounds(closestRow)
+
+                if (e.y !in rowBounds.y until (rowBounds.y + rowBounds.height)) {
+
+                    return
+                }
+
+                val path = tree.getPathForRow(closestRow) ?: return
                 val node = path.lastPathComponent as? DefaultMutableTreeNode ?: return
                 val data = node.userObject
 
                 if (e.clickCount == 1 && data is NodeData.FileItem) {
                     val bIsHovered = hoveredTab == (data.fileUrl to data.parentGroupId)
-                    if (bIsHovered && data.parentGroupId != null && isClickOnRemoveX(path, data, e))
-                    {
+
+                    if (bIsHovered && data.parentGroupId != null && isClickOnRemoveX(path, data, e)) {
                         removeFileFromGroup(data.fileUrl, data.parentGroupId)
+                        rebuildTree()
+                        return
                     }
                 }
 
-                if (data is NodeData.FileItem) {
+                if (e.clickCount == 2 && data is NodeData.FileItem) {
                     preferredActiveLocation =
                         data.fileUrl to data.parentGroupId // store the last item and group we clicked
 
@@ -149,8 +163,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             private fun removeFileFromGroup(fileUrl: String, groupId: UUID) {
                 membershipMappingByUrl[fileUrl]?.remove(groupId)
 
-                if (membershipMappingByUrl[fileUrl]?.isEmpty() == true)
-                {
+                if (membershipMappingByUrl[fileUrl]?.isEmpty() == true) {
                     membershipMappingByUrl.remove(fileUrl)
                 }
             }
@@ -180,11 +193,40 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
     }
 
     private fun installRemoveHoverTracking() {
+
+        fun setHovered(newHover: Pair<String, UUID?>?) {
+            if (hoveredTab != newHover) {
+                hoveredTab = newHover
+                tree.repaint()
+            }
+        }
+
         tree.addMouseMotionListener(object : MouseMotionAdapter() {
             override fun mouseMoved(e: MouseEvent) {
-                val path = tree.getPathForLocation(e.x, e.y)
-                val node = path?.lastPathComponent as? DefaultMutableTreeNode
+                val closestRow = tree.getClosestRowForLocation(e.x, e.y)
+                if (closestRow < 0) {
+                    return
+                }
+
+                val rowBounds = tree.getRowBounds(closestRow)
+
+                if (rowBounds == null || e.y < rowBounds.y || e.y > (rowBounds.y + rowBounds.height)) {
+                    setHovered(null)
+                    return
+                }
+
+                val path = tree.getPathForRow(closestRow) ?: run {
+                    setHovered(null)
+                    return
+                }
+
+                val node = path.lastPathComponent as? DefaultMutableTreeNode ?: run {
+                    setHovered(null)
+                    return
+                }
+
                 val data = node?.userObject
+
 
                 val new = if (data is NodeData.FileItem) {
                     data.fileUrl to data.parentGroupId
@@ -192,19 +234,13 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
                     null
                 }
 
-                if (hoveredTab != new) {
-                    hoveredTab = new
-                    tree.repaint()
-                }
+                setHovered(new)
             }
         })
 
         tree.addMouseListener(object : MouseAdapter() {
             override fun mouseExited(e: MouseEvent?) {
-                if (hoveredTab != null) {
-                    hoveredTab = null
-                    tree.repaint()
-                }
+                setHovered(null)
             }
         })
     }
@@ -278,22 +314,32 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
     private fun isClickOnRemoveX(path: TreePath, item: NodeData.FileItem, e: MouseEvent): Boolean {
         val bounds = tree.getPathBounds(path) ?: return false
 
-        val iconWidth = 16
-        val gap = 4
-        val gapBeforeRemove = 12
+        val fontMetrics = tree.getFontMetrics(tree.font)
 
-        val fm = tree.getFontMetrics(tree.font)
+        val iconWidth = AllIcons.FileTypes.Any_type.iconWidth
+        val gap = JBUI.scale(4)
 
-        val textStartX = bounds.x + iconWidth + gap
-        val textWidth = fm.stringWidth(item.displayName)
-
+        val prefix = if (item.fileUrl==activeFileUrl)
+        {
+            "▶ "
+        }
+        else
+        {
+            ""
+        }
+        val spacer = "   "
         val removeText = "✕"
-        val removeWidth = fm.stringWidth(removeText)
+        val textStartX = bounds.x + iconWidth + gap
 
-        val removeStartX = textStartX + textWidth + gap
-        val removeEndX = removeStartX + removeWidth
+        val removeStartX = textStartX + fontMetrics.stringWidth(prefix + item.displayName + spacer)
+        val removeEndX = removeStartX + fontMetrics.stringWidth(removeText)
 
-        return e.x in removeStartX..removeEndX
+        val padding = JBUI.scale(6)
+
+        val hitleft = removeStartX - padding
+        val hitRight = removeEndX + padding
+
+        return e.x in hitleft..hitRight
     }
 
     private fun renameGroup(groupId: UUID, newName: String) {
