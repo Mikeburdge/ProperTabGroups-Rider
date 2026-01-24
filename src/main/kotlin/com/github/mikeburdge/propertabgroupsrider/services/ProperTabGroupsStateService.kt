@@ -20,7 +20,9 @@ class ProperTabGroupsStateService : PersistentStateComponent<ProperTabGroupsStat
         var membershipByUrl: MutableMap<String, MutableList<String>> = mutableMapOf(),
 
         var expandedGroupIds: MutableList<String>? = null,
-        var unassignedExpanded: Boolean? = null
+        var unassignedExpanded: Boolean? = null,
+
+        var hasSavedExpansion: Boolean = false
     )
 
     private var myState = State()

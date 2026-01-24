@@ -81,8 +81,6 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
                     rebuildTree()
                 }
             }
-
-
         }
     }
 
@@ -155,6 +153,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
                     if (bIsHovered && data.parentGroupId != null && isClickOnRemoveX(path, data, e)) {
                         removeFileFromGroup(data.fileUrl, data.parentGroupId)
+                        persistModelOnly()
                         rebuildTree()
                         return
                     }
@@ -356,7 +355,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         val index = groups.indexOfFirst { it.id == groupId }
         if (index < 0) return
         groups[index] = groups[index].copy(name = newName)
-
+        persistModelOnly()
         rebuildTree()
 
         findTreePathForGroupId(groupId)?.let { path ->
@@ -496,6 +495,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         }
 
         val chosen = popup.selectedGroupIds
+        val newlyAdded = chosen - current
 
         if (chosen.isEmpty()) {
             membershipMappingByUrl.remove(selected.fileUrl)
@@ -504,7 +504,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         }
 
         persistModelOnly()
-        rebuildTree()
+        rebuildTree(newlyAdded)
     }
 
     private class AssignGroupsPopup(
@@ -629,7 +629,8 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         val newGroup = Group(UUID.randomUUID(), "New Group")
         groups.add(newGroup)
 
-        rebuildTree()
+        persistModelOnly()
+        rebuildTree(forceExpandGroupIds = setOf(newGroup.id))
 
         val path = findTreePathForGroupId(newGroup.id) ?: return
         tree.selectionPath = path
@@ -649,6 +650,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             set.remove(selected.id)
         }
 
+        persistModelOnly()
         rebuildTree()
     }
 
@@ -706,8 +708,10 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             )
         }
 
-        // filter unassigned. replaced the if statement with a "safe access expression"
-        filterNode(unassignedNode)?.let { rootNode.add(it) }
+        val shouldShowUnassigned = unassignedNode.childCount > 0 || filterText.isNotBlank()
+        if (shouldShowUnassigned) {
+            filterNode(unassignedNode)?.let { rootNode.add(it) }
+        }
 
         treeModel.reload()
 
@@ -742,7 +746,9 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             restoreExpansionState(ExpansionState(persistedExpanded, persistedUnassigned), forceExpandGroupIds)
 
         } else {
-            expandAllGroups()
+            if (!s.hasSavedExpansion) {
+                expandAllGroups()
+            }
         }
     }
 
@@ -936,6 +942,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
         s.expandedGroupIds = es.expandedGroupIds.map { it.toString() }.toMutableList()
         s.unassignedExpanded = es.unassignedExpanded
+        s.hasSavedExpansion = true
     }
 
     override fun dispose() {}
