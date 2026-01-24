@@ -1,5 +1,6 @@
 package com.github.mikeburdge.propertabgroupsrider.toolWindow
 
+import com.github.mikeburdge.propertabgroupsrider.services.ProperTabGroupsStateService
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.ActionManager
@@ -7,6 +8,7 @@ import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.components.service
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.FileEditorManagerEvent
 import com.intellij.openapi.fileEditor.FileEditorManagerListener
@@ -29,10 +31,13 @@ import java.awt.event.MouseMotionAdapter
 import java.util.*
 import javax.swing.*
 import javax.swing.event.DocumentEvent
+import javax.swing.event.TreeExpansionEvent
+import javax.swing.event.TreeExpansionListener
 import javax.swing.tree.DefaultMutableTreeNode
 import javax.swing.tree.DefaultTreeModel
 import javax.swing.tree.TreeCellEditor
 import javax.swing.tree.TreePath
+
 
 class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(BorderLayout()), Disposable {
 
@@ -47,9 +52,13 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
     private data class Group(val id: UUID, val name: String)
 
-    // used to choose which file of the ones in every group I want to highlight (it will be the most recently clicked)
+    // used to choose which file of the ones in every group I want to highlight (it will be the most recently 1clicked)
     private var preferredActiveLocation: Pair<String, UUID?>? = null
     private var hoveredTab: Pair<String, UUID?>? = null
+
+    // Persistence Stuff
+    private val stateService = project.service<ProperTabGroupsStateService>()
+    private var hasInitExpansion = false
 
     private val groups: MutableList<Group> = mutableListOf(
         Group(UUID.randomUUID(), "Gameplay"),
@@ -65,7 +74,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             val data = node.userObject
 
             if (data is NodeData.GroupHeader) {
-                val trimmed = newValue?.toString()?.trim().orEmpty()
+                val trimmed = newValue.toString().trim()
                 if (trimmed.isNotBlank()) {
                     renameGroup(data.id, trimmed)
                 } else {
@@ -189,6 +198,10 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             })
         // todo: drag and drop
 
+        // persistence
+        loadPersistentState()
+        installExpansionPersistenceTracking()
+
         rebuildTree()
     }
 
@@ -225,7 +238,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
                     return
                 }
 
-                val data = node?.userObject
+                val data = node.userObject
 
 
                 val new = if (data is NodeData.FileItem) {
@@ -319,12 +332,9 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         val iconWidth = AllIcons.FileTypes.Any_type.iconWidth
         val gap = JBUI.scale(4)
 
-        val prefix = if (item.fileUrl==activeFileUrl)
-        {
+        val prefix = if (item.fileUrl == activeFileUrl) {
             "▶ "
-        }
-        else
-        {
+        } else {
             ""
         }
         val spacer = "   "
@@ -336,10 +346,10 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
         val padding = JBUI.scale(6)
 
-        val hitleft = removeStartX - padding
+        val hitLeft = removeStartX - padding
         val hitRight = removeEndX + padding
 
-        return e.x in hitleft..hitRight
+        return e.x in hitLeft..hitRight
     }
 
     private fun renameGroup(groupId: UUID, newName: String) {
@@ -475,7 +485,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
     private fun showAssignGroupsPopupForSelectedTab() {
         val selected = getSelectedNodeData() as? NodeData.FileItem ?: return
-        val current = membershipMappingByUrl[selected.fileUrl] ?: emptySet()
+        val current: Set<UUID> = membershipMappingByUrl[selected.fileUrl] ?: emptySet()
 
         val popup = AssignGroupsPopup(
             project = project, fileName = selected.displayName, groups = groups.toList(), initialSelection = current
@@ -493,6 +503,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             membershipMappingByUrl[selected.fileUrl] = chosen.toMutableSet()
         }
 
+        persistModelOnly()
         rebuildTree()
     }
 
@@ -572,7 +583,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         return ExpansionState(expandedGroups, unassignedExpanded)
     }
 
-    private fun restoreExpansionState(state: ExpansionState, forceExpandGroupId: UUID? = null) {
+    private fun restoreExpansionState(state: ExpansionState, forceExpandGroupIds: Set<UUID> = emptySet()) {
         if (state.unassignedExpanded) {
             findTreePathForUnassigned()?.let {
                 tree.expandPath(it)
@@ -587,10 +598,8 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
         // I think when I get a settings menu going, I'll put this in the settings: Do we want to auto-expand the
         // collapsed groups when they have a tab added to them?
-        forceExpandGroupId?.let { id ->
-            findTreePathForGroupId(id)?.let {
-                tree.expandPath(it)
-            }
+        for (id in forceExpandGroupIds) {
+            findTreePathForGroupId(id)?.let { tree.expandPath(it) }
         }
     }
 
@@ -649,9 +658,13 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         return node.userObject as? NodeData
     }
 
-    private fun rebuildTree(forceExpandGroupId: UUID? = null) {
+    private fun rebuildTree(forceExpandGroupIds: Set<UUID> = emptySet()) {
 
-        val expansionState = recordExpansionState()
+        val expansionState = if (hasInitExpansion) {
+            recordExpansionState()
+        } else {
+            null
+        }
 
         rootNode.removeAllChildren()
 
@@ -700,10 +713,44 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
 
         SwingUtilities.invokeLater {
-            restoreExpansionState(expansionState, forceExpandGroupId)
+            if (!hasInitExpansion) {
+                restorePersistedOrDefaultExpansion(forceExpandGroupIds)
+                hasInitExpansion = true
+            } else {
+                restoreExpansionState(expansionState ?: ExpansionState(emptySet(), false), forceExpandGroupIds)
+            }
+
+            persistExpansionOnly()
         }
 
         // this is also probably where I highlight/ select the active tab
+    }
+
+    private fun restorePersistedOrDefaultExpansion(forceExpandGroupIds: Set<UUID>) {
+
+        val s = stateService.state
+
+        val hasPersistedExpansion = s.expandedGroupIds != null || s.unassignedExpanded != null
+
+        if (hasPersistedExpansion) {
+            val persistedExpanded: Set<UUID> = s.expandedGroupIds
+                ?.mapNotNull { runCatching { UUID.fromString(it) }.getOrNull() }
+                ?.toSet() ?: emptySet()
+
+            val persistedUnassigned = s.unassignedExpanded ?: true
+
+            restoreExpansionState(ExpansionState(persistedExpanded, persistedUnassigned), forceExpandGroupIds)
+
+        } else {
+            expandAllGroups()
+        }
+    }
+
+    private fun expandAllGroups() {
+        for (group in groups) {
+            findTreePathForGroupId(group.id)?.let { tree.expandPath(it) }
+        }
+        findTreePathForUnassigned()?.let { tree.expandPath(it) }
     }
 
     private fun filterNode(node: DefaultMutableTreeNode): DefaultMutableTreeNode? {
@@ -846,42 +893,50 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         return dfs(root, TreePath(root))
     }
 
+
+    private fun loadPersistentState() {
+        val s = stateService.state
+
+        if (s.groups.isNotEmpty()) {
+            groups.clear()
+            groups.addAll(
+                s.groups.map { g ->
+                    Group(UUID.fromString(g.id), g.name)
+                }
+            )
+        } else {
+            persistModelOnly()
+        }
+
+        membershipMappingByUrl.clear()
+        for ((url, ids) in s.membershipByUrl) {
+            membershipMappingByUrl[url] = ids.map { UUID.fromString(it) }.toMutableSet()
+        }
+    }
+
+    private fun installExpansionPersistenceTracking() {
+        tree.addTreeExpansionListener(object : TreeExpansionListener {
+            override fun treeExpanded(event: TreeExpansionEvent?) = persistExpansionOnly()
+            override fun treeCollapsed(event: TreeExpansionEvent?) = persistExpansionOnly()
+
+        })
+    }
+
+    private fun persistModelOnly() {
+        val s = stateService.state
+        s.groups = groups.map { ProperTabGroupsStateService.GroupState(it.id.toString(), it.name) }.toMutableList()
+        s.membershipByUrl = membershipMappingByUrl.mapValues { (_, set) ->
+            set.map { it.toString() }.toMutableList()
+        }.toMutableMap()
+    }
+
+    private fun persistExpansionOnly() {
+        val es = recordExpansionState()
+        val s = stateService.state
+
+        s.expandedGroupIds = es.expandedGroupIds.map { it.toString() }.toMutableList()
+        s.unassignedExpanded = es.unassignedExpanded
+    }
+
     override fun dispose() {}
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
