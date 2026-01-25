@@ -33,10 +33,7 @@ import javax.swing.*
 import javax.swing.event.DocumentEvent
 import javax.swing.event.TreeExpansionEvent
 import javax.swing.event.TreeExpansionListener
-import javax.swing.tree.DefaultMutableTreeNode
-import javax.swing.tree.DefaultTreeModel
-import javax.swing.tree.TreeCellEditor
-import javax.swing.tree.TreePath
+import javax.swing.tree.*
 
 
 class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(BorderLayout()), Disposable {
@@ -95,6 +92,8 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         showsRootHandles = true
 
         emptyText.text = "toolWindow.empty"
+
+        selectionModel.selectionMode = TreeSelectionModel.DISCONTIGUOUS_TREE_SELECTION
 
         TreeUIHelper.getInstance().installTreeSpeedSearch(this)
     }
@@ -439,7 +438,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             add(AddGroupAction())
             add(DeleteGroupAction())
             addSeparator()
-            add(AssignGroupsAction())
+            add(MoveSelectedTabsAction())
         }
         val toolbar = ActionManager.getInstance().createActionToolbar("ProperTabGroupsToolbar", group, true)
 
@@ -468,26 +467,43 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         }
     }
 
-    private inner class AssignGroupsAction : AnAction(
-        "Assign to Groups...",
-        "Add this tab to one or more groups",
-        AllIcons.Actions.Edit
+    private inner class MoveSelectedTabsAction : AnAction(
+        "Move Tabs...",
+        "Move selected tabs to group",
+        AllIcons.Actions.MoveTo2
     ) {
         override fun actionPerformed(p0: AnActionEvent) {
-            showAssignGroupsPopupForSelectedTab()
+            showAssignGroupsPopupForSelectedTabs()
         }
 
         override fun update(e: AnActionEvent) {
-            e.presentation.isEnabled = getSelectedNodeData() is NodeData.FileItem
+            e.presentation.isEnabled = getSelectedFileItems().isNotEmpty()
         }
     }
 
-    private fun showAssignGroupsPopupForSelectedTab() {
-        val selected = getSelectedNodeData() as? NodeData.FileItem ?: return
-        val current: Set<UUID> = membershipMappingByUrl[selected.fileUrl] ?: emptySet()
+    private fun showAssignGroupsPopupForSelectedTabs() {
+
+        val selectedTabs = getSelectedFileItems().distinctBy { it.fileUrl }
+        if (selectedTabs.isEmpty()) {
+            return
+        }
+
+
+        val label = if (selectedTabs.size == 1) {
+            selectedTabs.first().displayName
+        } else {
+            "${selectedTabs.size} tabs"
+        }
+
+        val initialSelection: Set<UUID> = selectedTabs
+            .asSequence().flatMap { membershipMappingByUrl[it.fileUrl].orEmpty().asSequence() }.toSet()
+
 
         val popup = AssignGroupsPopup(
-            project = project, fileName = selected.displayName, groups = groups.toList(), initialSelection = current
+            project = project,
+            subjectLabel = label,
+            groups = groups.toList(),
+            initialSelection = initialSelection
         )
 
         if (!popup.showAndGet()) {
@@ -495,38 +511,51 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         }
 
         val chosen = popup.selectedGroupIds
-        val newlyAdded = chosen - current
 
-        if (chosen.isEmpty()) {
-            membershipMappingByUrl.remove(selected.fileUrl)
-        } else {
-            membershipMappingByUrl[selected.fileUrl] = chosen.toMutableSet()
+
+        val newlyAdded = mutableSetOf<UUID>()
+
+        for (tab in selectedTabs) {
+            val url = tab.fileUrl
+            val current = membershipMappingByUrl[url].orEmpty()
+
+            newlyAdded += (chosen - current)
+
+            if (chosen.isEmpty()) {
+                membershipMappingByUrl.remove(url)
+            } else {
+                membershipMappingByUrl[url] = chosen.toMutableSet()
+            }
         }
 
         persistModelOnly()
         rebuildTree(newlyAdded)
     }
 
+
     private class AssignGroupsPopup(
-        project: Project, fileName: String, private val groups: List<Group>, initialSelection: Set<UUID>
+        project: Project,
+        subjectLabel: String,
+        private val groups: List<Group>,
+        initialSelection: Set<UUID>
     ) : DialogWrapper(project, true) {
-        private val checkBoxes: Map<UUID, JBCheckBox> =
-            groups.associate { it.id to JBCheckBox(it.name, initialSelection.contains(it.id)) }
+
+        private val checkBoxes: Map<UUID, JBCheckBox> = groups.associate { it.id to JBCheckBox(it.name, initialSelection.contains(it.id)) }
 
         var selectedGroupIds: Set<UUID> = emptySet()
+        private set
 
         init {
-            title = "Assign \"$fileName\" to Groups"
+            title = "Assign \"$subjectLabel\" to Groups"
             init()
         }
-
 
         override fun createCenterPanel(): JComponent {
             val root = JPanel(BorderLayout(0, 10)).apply {
                 border = JBUI.Borders.empty(10)
             }
 
-            root.add(JBLabel("Select the groups this tab should be assigned to:"), BorderLayout.NORTH)
+            root.add(JBLabel("Select the groups these tabs should be assigned to:"), BorderLayout.NORTH)
 
             val listPanel = JPanel().apply {
                 layout = BoxLayout(this, BoxLayout.Y_AXIS)
@@ -652,6 +681,35 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
         persistModelOnly()
         rebuildTree()
+    }
+
+    private fun getSelectedFileItems(): List<NodeData.FileItem> {
+        return tree.selectionPaths.orEmpty()
+            .mapNotNull { path ->
+                val node = path.lastPathComponent as? DefaultMutableTreeNode
+                node?.userObject as? NodeData.FileItem
+            }
+    }
+
+    private fun moveSelectedTabsToGroup(targetGroupId: UUID?) {
+        val selectedTabs = getSelectedFileItems()
+            .distinctBy { it.fileUrl }
+
+        if (selectedTabs.isEmpty()) {
+            return
+        }
+
+        for (tab in selectedTabs) {
+            val url = tab.fileUrl
+            if (targetGroupId == null) {
+                membershipMappingByUrl.remove(url)
+            } else {
+                membershipMappingByUrl[url] = mutableSetOf(targetGroupId)
+            }
+        }
+
+        persistModelOnly()
+        rebuildTree(forceExpandGroupIds = targetGroupId?.let { setOf(it) } ?: emptySet())
     }
 
     private fun getSelectedNodeData(): NodeData? {
