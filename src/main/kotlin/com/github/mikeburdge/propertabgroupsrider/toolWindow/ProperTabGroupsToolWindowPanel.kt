@@ -150,7 +150,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
                 if (e.clickCount == 1 && data is NodeData.FileItem) {
                     val bIsHovered = hoveredTab == (data.fileUrl to data.parentGroupId)
 
-                    if (bIsHovered && data.parentGroupId != null && isClickOnRemoveX(path, data, e)) {
+                    if (bIsHovered && data.parentGroupId != null && isClickOnRemoveX(e)) {
                         removeFileFromGroup(data.fileUrl, data.parentGroupId)
                         persistModelOnly()
                         rebuildTree()
@@ -322,32 +322,16 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
     }
 
     // if the above hack is fine then so is this lol
-    private fun isClickOnRemoveX(path: TreePath, item: NodeData.FileItem, e: MouseEvent): Boolean {
-        val bounds = tree.getPathBounds(path) ?: return false
+    private fun isClickOnRemoveX(e: MouseEvent): Boolean {
 
-        val fontMetrics = tree.getFontMetrics(tree.font)
+        val vr = tree.visibleRect
+        val iconWidth = AllIcons.Actions.Close.iconWidth
+        val padding = JBUI.scale(8)
 
-        val iconWidth = AllIcons.FileTypes.Any_type.iconWidth
-        val gap = JBUI.scale(4)
+        val right = vr.x + vr.width - padding
+        val left = right - iconWidth - padding
 
-        val prefix = if (item.fileUrl == activeFileUrl) {
-            "▶ "
-        } else {
-            ""
-        }
-        val spacer = "   "
-        val removeText = "✕"
-        val textStartX = bounds.x + iconWidth + gap
-
-        val removeStartX = textStartX + fontMetrics.stringWidth(prefix + item.displayName + spacer)
-        val removeEndX = removeStartX + fontMetrics.stringWidth(removeText)
-
-        val padding = JBUI.scale(6)
-
-        val hitLeft = removeStartX - padding
-        val hitRight = removeEndX + padding
-
-        return e.x in hitLeft..hitRight
+        return e.x in left..right
     }
 
     private fun renameGroup(groupId: UUID, newName: String) {
@@ -363,60 +347,105 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         }
     }
 
-    private inner class ProperTabTreeRenderer : ColoredTreeCellRenderer() {
-        override fun customizeCellRenderer(
-            tree: JTree, value: Any?, selected: Boolean, expanded: Boolean, leaf: Boolean, row: Int, hasFocus: Boolean
-        ) {
-            val node = value as? DefaultMutableTreeNode ?: return
-            val data = node.userObject
+    private inner class ProperTabTreeRenderer : JPanel(BorderLayout()), TreeCellRenderer {
+        private val leftSideRenderer = object : ColoredTreeCellRenderer() {
+            override fun customizeCellRenderer(
+                tree: JTree,
+                value: Any?,
+                selected: Boolean,
+                expanded: Boolean,
+                leaf: Boolean,
+                row: Int,
+                hasFocus: Boolean
+            ) {
+                val node = value as? DefaultMutableTreeNode ?: return
+                val data = node.userObject
 
-            when (data) {
-                is NodeData.GroupHeader -> {
-                    icon = AllIcons.Nodes.Folder
-                    append(data.name, SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
-                }
-
-                is NodeData.UnassignedHeader -> {
-                    icon = AllIcons.General.InspectionsOK
-                    append("Unassigned", SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
-                }
-
-                is NodeData.FileItem -> {
-                    val bIsActive = data.fileUrl == activeFileUrl
-
-                    val baseIcon = AllIcons.FileTypes.Any_type
-                    icon = if (bIsActive) {
-                        badgeIcon(baseIcon, AllIcons.Actions.Checked)
-                    } else {
-                        baseIcon
+                when (data) {
+                    is NodeData.GroupHeader -> {
+                        icon = AllIcons.Nodes.Folder
+                        append(data.name, SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
                     }
 
-                    val attributes = if (bIsActive) {
-                        SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES
-                    } else {
-                        SimpleTextAttributes.REGULAR_ATTRIBUTES
+                    is NodeData.UnassignedHeader -> {
+                        icon = AllIcons.General.InspectionsOK
+                        append("Unassigned", SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
                     }
 
-                    if (bIsActive) {
-                        append(
-                            "▶ ",
+                    is NodeData.FileItem -> {
+                        val bIsActive = data.fileUrl == activeFileUrl
+
+                        val baseIcon = AllIcons.FileTypes.Any_type
+                        icon = if (bIsActive) {
+                            badgeIcon(baseIcon, AllIcons.Actions.Checked)
+                        } else {
+                            baseIcon
+                        }
+
+                        val attributes = if (bIsActive) {
+                            SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES
+                        } else {
                             SimpleTextAttributes.REGULAR_ATTRIBUTES
-                        ) // Apparently it accepts ascii text for this lol
+                        }
+
+                        if (bIsActive) {
+                            append(
+                                "▶ ",
+                                SimpleTextAttributes.REGULAR_ATTRIBUTES
+                            ) // Apparently it accepts ascii text for this lol
+                        }
+
+                        append(data.displayName, attributes)
                     }
 
-                    append(data.displayName, attributes)
-
-                    val bIsHovered = hoveredTab == (data.fileUrl to data.parentGroupId)
-                    val bCanRemove = data.parentGroupId != null
-                    if (bIsHovered && bCanRemove) {
-                        append("   ✕", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                    else -> {
+                        append(data?.toString() ?: "", SimpleTextAttributes.REGULAR_ATTRIBUTES)
                     }
-                }
-
-                else -> {
-                    append(data?.toString() ?: "", SimpleTextAttributes.REGULAR_ATTRIBUTES)
                 }
             }
+        }
+
+        private val closeLabel = JBLabel(AllIcons.Actions.Close).apply {
+            isOpaque = false
+            isVisible = false
+            toolTipText = "Remove from group"
+            border = JBUI.Borders.empty(0, 0, 0, JBUI.scale(8))
+        }
+
+        init {
+            isOpaque = false
+            leftSideRenderer.isOpaque = false
+
+            add(leftSideRenderer, BorderLayout.CENTER)
+            add(closeLabel, BorderLayout.EAST)
+
+        }
+
+        override fun getTreeCellRendererComponent(
+            tree: JTree?,
+            value: Any?,
+            selected: Boolean,
+            expanded: Boolean,
+            leaf: Boolean,
+            row: Int,
+            hasFocus: Boolean
+        ): Component? {
+            leftSideRenderer.getTreeCellRendererComponent(tree, value, selected, expanded, leaf, row, hasFocus)
+
+            val node = value as? DefaultMutableTreeNode
+            val data = node?.userObject
+
+            val shouldShowCloseButton =
+                (data is NodeData.FileItem) &&
+                        (data.parentGroupId != null) &&
+                        (hoveredTab == (data.fileUrl to data.parentGroupId))
+
+            closeLabel.isVisible = shouldShowCloseButton
+
+            background = leftSideRenderer.background
+            foreground = leftSideRenderer.foreground
+
+            return this
         }
 
         private fun badgeIcon(base: Icon, badge: Icon): Icon {
@@ -540,10 +569,11 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         initialSelection: Set<UUID>
     ) : DialogWrapper(project, true) {
 
-        private val checkBoxes: Map<UUID, JBCheckBox> = groups.associate { it.id to JBCheckBox(it.name, initialSelection.contains(it.id)) }
+        private val checkBoxes: Map<UUID, JBCheckBox> =
+            groups.associate { it.id to JBCheckBox(it.name, initialSelection.contains(it.id)) }
 
         var selectedGroupIds: Set<UUID> = emptySet()
-        private set
+            private set
 
         init {
             title = "Assign \"$subjectLabel\" to Groups"
@@ -732,8 +762,9 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         for (group in groups) {
             val groupNode = DefaultMutableTreeNode(NodeData.GroupHeader(group.id, group.name))
 
-            val memberUrls = membershipMappingByUrl.asSequence().filter { (_, groupIds) -> groupIds.contains(group.id) }
-                .map { (url, _) -> url }.toList()
+            val memberUrls =
+                membershipMappingByUrl.asSequence().filter { (_, groupIds) -> groupIds.contains(group.id) }
+                    .map { (url, _) -> url }.toList()
 
             for (url in memberUrls) {
                 groupNode.add(
