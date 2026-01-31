@@ -22,9 +22,7 @@ import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.treeStructure.Tree
 import com.intellij.util.ui.JBUI
-import java.awt.BorderLayout
-import java.awt.Component
-import java.awt.Dimension
+import java.awt.*
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.awt.event.MouseMotionAdapter
@@ -148,12 +146,13 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
                 val data = node.userObject
 
                 if (e.clickCount == 1 && data is NodeData.FileItem) {
-                    val bIsHovered = hoveredTab == (data.fileUrl to data.parentGroupId)
-
-                    if (bIsHovered && data.parentGroupId != null && isClickOnRemoveX(e)) {
+                    if (data.parentGroupId != null && isPointInRemoveZone(e.x)) {
                         removeFileFromGroup(data.fileUrl, data.parentGroupId)
                         persistModelOnly()
                         rebuildTree()
+
+                        SwingUtilities.invokeLater { refreshHoverFromMousePointer() }
+
                         return
                     }
                 }
@@ -205,53 +204,17 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
     private fun installRemoveHoverTracking() {
 
-        fun setHovered(newHover: Pair<String, UUID?>?) {
-            if (hoveredTab != newHover) {
-                hoveredTab = newHover
-                tree.repaint()
-            }
-        }
-
         tree.addMouseMotionListener(object : MouseMotionAdapter() {
             override fun mouseMoved(e: MouseEvent) {
-                val closestRow = tree.getClosestRowForLocation(e.x, e.y)
-                if (closestRow < 0) {
-                    return
-                }
-
-                val rowBounds = tree.getRowBounds(closestRow)
-
-                if (rowBounds == null || e.y < rowBounds.y || e.y > (rowBounds.y + rowBounds.height)) {
-                    setHovered(null)
-                    return
-                }
-
-                val path = tree.getPathForRow(closestRow) ?: run {
-                    setHovered(null)
-                    return
-                }
-
-                val node = path.lastPathComponent as? DefaultMutableTreeNode ?: run {
-                    setHovered(null)
-                    return
-                }
-
-                val data = node.userObject
-
-
-                val new = if (data is NodeData.FileItem) {
-                    data.fileUrl to data.parentGroupId
-                } else {
-                    null
-                }
-
-                setHovered(new)
+                updateHoverFromTreePoint(e.x, e.y)
             }
         })
 
         tree.addMouseListener(object : MouseAdapter() {
             override fun mouseExited(e: MouseEvent?) {
-                setHovered(null)
+                hoveredTab = null
+                tree.cursor = Cursor.getDefaultCursor()
+                tree.repaint()
             }
         })
     }
@@ -321,18 +284,66 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         return e.x in textStartX..textEndX
     }
 
-    // if the above hack is fine then so is this lol
-    private fun isClickOnRemoveX(e: MouseEvent): Boolean {
+    private val removeButtonWidthPx = JBUI.scale(26)
 
-        val vr = tree.visibleRect
-        val iconWidth = AllIcons.Actions.Close.iconWidth
-        val padding = JBUI.scale(8)
+    private fun updateHoverFromTreePoint(x: Int, y: Int) {
 
-        val right = vr.x + vr.width - padding
-        val left = right - iconWidth - padding
+        val prevHover = hoveredTab
+        val prevCursor = tree.cursor
 
-        return e.x in left..right
+        var newHover: Pair<String, UUID?>? = null
+        var newCursor: Cursor = Cursor.getDefaultCursor()
+
+        val closestRow = tree.getClosestRowForLocation(x, y)
+        if (closestRow >= 0) {
+            val rowBounds = tree.getRowBounds(closestRow)
+            if (rowBounds != null && y in rowBounds.y until (rowBounds.y + rowBounds.height)) {
+
+                val path = tree.getPathForRow(closestRow)
+                val node = path?.lastPathComponent as? DefaultMutableTreeNode
+                val data = node?.userObject
+
+
+                if (data is NodeData.FileItem) {
+                    newHover = data.fileUrl to data.parentGroupId
+
+                    val isOverRemoveZone = (data.parentGroupId != null) && isPointInRemoveZone(x)
+                    if (isOverRemoveZone) {
+                        newCursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+                    }
+                }
+            }
+        }
+
+        val hoverChanged = (prevHover != newHover)
+        val cursorChanged = (prevCursor != newCursor)
+
+        if (hoverChanged) {
+            hoveredTab = newHover
+        }
+        if (cursorChanged) {
+            tree.cursor = newCursor
+        }
+        if (hoverChanged || cursorChanged) {
+            tree.repaint()
+        }
     }
+
+    private fun refreshHoverFromMousePointer() {
+        val pointer = MouseInfo.getPointerInfo()?.location ?: return
+        val point = Point(pointer)
+
+        SwingUtilities.convertPointFromScreen(point, tree)
+        updateHoverFromTreePoint(point.x, point.y)
+    }
+
+    private fun isPointInRemoveZone(mouseX: Int): Boolean {
+        val vr = tree.visibleRect
+        val right = vr.x + vr.width
+        val left = right - removeButtonWidthPx
+        return mouseX in left..right
+    }
+
 
     private fun renameGroup(groupId: UUID, newName: String) {
         val index = groups.indexOfFirst { it.id == groupId }
@@ -348,6 +359,12 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
     }
 
     private inner class ProperTabTreeRenderer : JPanel(BorderLayout()), TreeCellRenderer {
+
+        override fun setBounds(x: Int, y: Int, width: Int, height: Int) {
+            super.setBounds(x, y, width, height)
+            doLayout()
+        }
+
         private val leftSideRenderer = object : ColoredTreeCellRenderer() {
             override fun customizeCellRenderer(
                 tree: JTree,
@@ -409,7 +426,9 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             isOpaque = false
             isVisible = false
             toolTipText = "Remove from group"
-            border = JBUI.Borders.empty(0, 0, 0, JBUI.scale(8))
+
+            preferredSize = Dimension(removeButtonWidthPx, 0)
+            horizontalAlignment = SwingConstants.CENTER
         }
 
         init {
@@ -429,7 +448,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             leaf: Boolean,
             row: Int,
             hasFocus: Boolean
-        ): Component? {
+        ): Component {
             leftSideRenderer.getTreeCellRendererComponent(tree, value, selected, expanded, leaf, row, hasFocus)
 
             val node = value as? DefaultMutableTreeNode
@@ -438,9 +457,18 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             val shouldShowCloseButton =
                 (data is NodeData.FileItem) &&
                         (data.parentGroupId != null) &&
-                        (hoveredTab == (data.fileUrl to data.parentGroupId))
+                        ((hoveredTab == (data.fileUrl to data.parentGroupId)))//|| selected)
 
             closeLabel.isVisible = shouldShowCloseButton
+
+            val t = tree ?: return this
+            val fullWidth = maxOf(t.visibleRect.width, t.width)
+            val height = maxOf(leftSideRenderer.preferredSize.height, closeLabel.preferredSize.height)
+
+            preferredSize = Dimension(fullWidth, height)
+            size = preferredSize
+
+            doLayout()
 
             background = leftSideRenderer.background
             foreground = leftSideRenderer.foreground
@@ -814,6 +842,8 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             }
 
             persistExpansionOnly()
+
+            refreshHoverFromMousePointer()
         }
 
         // this is also probably where I highlight/ select the active tab
