@@ -102,6 +102,67 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         TreeUIHelper.getInstance().installTreeSpeedSearch(this)
     }
 
+private val globalMouseWatcher = java.awt.event.AWTEventListener { event ->
+
+    if (event !is MouseEvent) {
+        return@AWTEventListener
+    }
+    val isRelevant = removeRowToolbar.component.isVisible || hoveredFileItem != null || removeTarget != null
+
+    if (!isRelevant) {
+        return@AWTEventListener
+    }
+    if (!this@ProperTabGroupsToolWindowPanel.isShowing) {
+        return@AWTEventListener
+    }
+
+    val pointer = MouseInfo.getPointerInfo()?.location
+    if (pointer == null) {
+        clearHoverState()
+        return@AWTEventListener
+    }
+
+    val point = Point(pointer)
+    SwingUtilities.convertPointFromScreen(point, this@ProperTabGroupsToolWindowPanel)
+
+    val isInsidePanel = point.x >= 0 && point.y >=0 && point.x < this@ProperTabGroupsToolWindowPanel.width && point.y < this@ProperTabGroupsToolWindowPanel.height
+
+    if (!isInsidePanel) {
+        clearHoverState()
+        return@AWTEventListener
+    }
+
+    SwingUtilities.invokeLater { refreshHoverFromMousePointer() }
+}
+
+    private var globalMouseWatcherInstalled = false
+
+    private fun installGlobalMouseWatcher(){
+        if (globalMouseWatcherInstalled) {
+            return
+        }
+        Toolkit.getDefaultToolkit()
+            .addAWTEventListener(globalMouseWatcher, AWTEvent.MOUSE_MOTION_EVENT_MASK or AWTEvent.MOUSE_EVENT_MASK)
+        globalMouseWatcherInstalled= true
+    }
+
+    private fun uninstallGlobalMouseWatcher() {
+        if (!globalMouseWatcherInstalled) {
+            return
+        }
+        Toolkit.getDefaultToolkit().removeAWTEventListener { globalMouseWatcher }
+        globalMouseWatcherInstalled = false
+    }
+
+    override fun addNotify() {
+        super.addNotify()
+        installGlobalMouseWatcher()
+    }
+
+    override fun removeNotify() {
+        uninstallGlobalMouseWatcher()
+        super.removeNotify()
+    }
 
     private inner class RemoveFromGroupAction : AnAction(
         "Remove from group",
@@ -1102,5 +1163,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         s.hasSavedExpansion = true
     }
 
-    override fun dispose() {}
+    override fun dispose() {
+        uninstallGlobalMouseWatcher()
+    }
 }
