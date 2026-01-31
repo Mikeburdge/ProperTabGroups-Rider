@@ -23,9 +23,7 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.treeStructure.Tree
 import com.intellij.util.ui.JBUI
 import java.awt.*
-import java.awt.event.MouseAdapter
-import java.awt.event.MouseEvent
-import java.awt.event.MouseMotionAdapter
+import java.awt.event.*
 import java.util.*
 import javax.swing.*
 import javax.swing.event.DocumentEvent
@@ -52,7 +50,8 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
     private var hoveredTab: Pair<String, UUID?>? = null // which tab is hovered
     private var hoveredFileItem: NodeData.FileItem? = null // data for the action stuff
-    private var hoveredRowBounds: java.awt.Rectangle? = null // positioning
+    private var hoveredRowBounds: Rectangle? = null // positioning
+    private var removeTarget: NodeData.FileItem? = null
 
     // Persistence Stuff
     private val stateService = project.service<ProperTabGroupsStateService>()
@@ -88,8 +87,12 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
     private val searchField = SearchTextField()
 
-    private val tree = Tree(treeModel).apply {
+    private val tree = object : Tree(treeModel) {
+        override fun getScrollableTracksViewportWidth(): Boolean = true
+    }.apply {
+
         isRootVisible = false
+
         showsRootHandles = true
 
         emptyText.text = "toolWindow.empty"
@@ -99,13 +102,14 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         TreeUIHelper.getInstance().installTreeSpeedSearch(this)
     }
 
+
     private inner class RemoveFromGroupAction : AnAction(
         "Remove from group",
         "Remove this tab from the group",
         AllIcons.Actions.Close
     ) {
         override fun actionPerformed(p0: AnActionEvent) {
-            val item = hoveredFileItem ?: return
+            val item = removeTarget ?: return
             val groupId = item.parentGroupId ?: return
 
             membershipMappingByUrl[item.fileUrl]?.remove(groupId)
@@ -225,6 +229,17 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         rebuildTree()
     }
 
+    private fun clearHoverState() {
+        hoveredTab = null
+        hoveredFileItem = null
+        hoveredRowBounds = null
+        removeTarget = null
+
+        removeRowToolbar.component.isVisible = false
+
+        tree.cursor = Cursor.getDefaultCursor()
+        tree.repaint()
+    }
     private fun installRemoveHoverTracking() {
 
         tree.addMouseMotionListener(object : MouseMotionAdapter() {
@@ -235,13 +250,39 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
         tree.addMouseListener(object : MouseAdapter() {
             override fun mouseExited(e: MouseEvent?) {
-                hoveredTab = null
-                hoveredFileItem = null
-                hoveredRowBounds = null
+                SwingUtilities.invokeLater { refreshHoverFromMousePointer() }
+            }
+        })
 
-                updateRemoveButtonOverlay()
-                tree.cursor = Cursor.getDefaultCursor()
-                tree.repaint()
+        removeRowToolbar.component.addMouseMotionListener(object : MouseMotionAdapter() {
+            override fun mouseMoved(e: MouseEvent) {
+                val point = SwingUtilities.convertPoint(removeRowToolbar.component, e.point, tree)
+                updateHoverFromTreePoint(point.x, point.y)
+            }
+        })
+
+        removeRowToolbar.component.addMouseListener(object : MouseAdapter() {
+            override fun mouseExited(e: MouseEvent?) {
+                SwingUtilities.invokeLater { refreshHoverFromMousePointer() }
+            }
+        })
+
+        this@ProperTabGroupsToolWindowPanel.addMouseListener(object : MouseAdapter() {
+            override fun mouseExited(e: MouseEvent?) {
+                clearHoverState()
+            }
+        })
+
+        treeScrollPane.addMouseListener(object : MouseAdapter() {
+            override fun mouseExited(e: MouseEvent?) {
+                clearHoverState()
+            }
+        })
+
+        isFocusable = true
+        addFocusListener(object : FocusAdapter() {
+            override fun focusLost(e: FocusEvent?) {
+                clearHoverState()
             }
         })
     }
@@ -293,7 +334,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
     }
 
     //  ok so I found this online, hopefully it works. I imagine its going to fail when people zoom in and zoom out,
-    //  so I might scrap this feature or find a more solid way of doing it
+//  so I might scrap this feature or find a more solid way of doing it
     private fun isClickOnGroupText(
         path: TreePath, group: NodeData.GroupHeader, e: MouseEvent
     ): Boolean {
@@ -348,6 +389,8 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         tree.repaint()
     }
 
+    private val removeButtonWidth = JBUI.scale(22)
+    private val removeButtonMargin = JBUI.scale(10)
 
     private fun updateRemoveButtonOverlay() {
         val comp = removeRowToolbar.component
@@ -355,12 +398,14 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         val item = hoveredFileItem
         val bounds = hoveredRowBounds
         if (item == null || bounds == null || item.parentGroupId == null) {
+            removeTarget = null
             comp.isVisible = false
             return
         }
 
-        val visRect = tree.visibleRect
+        removeTarget = item
 
+        val visRect = tree.visibleRect
 
         val prefWidth = comp.preferredSize.width
         val width = maxOf(prefWidth, JBUI.scale(24))
@@ -369,9 +414,10 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         val x = visRect.x + visRect.width - width - JBUI.scale(20) // add indent here as necessary
         val y = bounds.y
 
-        comp.setBounds(x, y, width, height)
+        if (comp.x != x || comp.y != y || comp.width != removeButtonWidth || comp.height != bounds.height)
+            comp.setBounds(x, y, width, height)
         comp.isVisible = true
-        comp.revalidate()
+//    comp.revalidate()
         comp.repaint()
     }
 
