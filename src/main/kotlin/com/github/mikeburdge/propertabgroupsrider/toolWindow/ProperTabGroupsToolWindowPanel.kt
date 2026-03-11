@@ -212,7 +212,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         if (!globalMouseWatcherInstalled) {
             return
         }
-        Toolkit.getDefaultToolkit().removeAWTEventListener { globalMouseWatcher }
+        Toolkit.getDefaultToolkit().removeAWTEventListener ( globalMouseWatcher)
         globalMouseWatcherInstalled = false
     }
 
@@ -1155,28 +1155,6 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
                 node?.userObject as? NodeData.FileItem
             }
     }
-
-    private fun moveSelectedTabsToGroup(targetGroupId: UUID?) {
-        val selectedTabs = getSelectedFileItems()
-            .distinctBy { it.fileUrl }
-
-        if (selectedTabs.isEmpty()) {
-            return
-        }
-
-        for (tab in selectedTabs) {
-            val url = tab.fileUrl
-            if (targetGroupId == null) {
-                membershipMappingByUrl.remove(url)
-            } else {
-                membershipMappingByUrl[url] = mutableSetOf(targetGroupId)
-            }
-        }
-
-        persistModelOnly()
-        rebuildTree(forceExpandGroupIds = targetGroupId?.let { setOf(it) } ?: emptySet())
-    }
-
 
     // ======================================================
     // Save and Load
