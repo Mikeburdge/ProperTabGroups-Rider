@@ -45,17 +45,15 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
     private data class Group(val id: UUID, val name: String)
 
-    // used to choose which file of the ones in every group I want to highlight (it will be the most recently 1clicked)
-    private var preferredActiveLocation: Pair<String, UUID?>? = null
 
-    private var hoveredTab: Pair<String, UUID?>? = null // which tab is hovered
-    private var hoveredFileItem: NodeData.FileItem? = null // data for the action stuff
-    private var hoveredRowBounds: Rectangle? = null // positioning
-    private var removeTarget: NodeData.FileItem? = null
+    private data class ExpansionState(
+        val expandedGroupIds: Set<UUID>,
+        val unassignedExpanded: Boolean
+    )
 
-    // Persistence Stuff
+
+    // State Stuff
     private val stateService = project.service<ProperTabGroupsStateService>()
-    private var hasInitExpansion = false
 
     private val groups: MutableList<Group> = mutableListOf(
         Group(UUID.randomUUID(), "Gameplay"),
@@ -63,6 +61,34 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
     )
 
     private val membershipMappingByUrl: MutableMap<String, MutableSet<UUID>> = mutableMapOf()
+
+    // UI State
+
+    private var filterText: String = ""
+
+    private var activeFileUrl: String? = null
+
+    // used to choose which file of the ones in every group I want to highlight (it will be the most recently 1clicked)
+    private var preferredActiveLocation: Pair<String, UUID?>? = null
+
+    // Hover state
+
+    private var hoveredTab: Pair<String, UUID?>? = null // which tab is hovered
+    private var hoveredFileItem: NodeData.FileItem? = null // data for the action stuff
+    private var hoveredRowBounds: Rectangle? = null // positioning
+    private var removeTarget: NodeData.FileItem? = null
+
+
+    // Expansion stuff
+
+    private var hasInitExpansion = false
+    private var allowProgrammaticRenameOnce = false
+
+    // ======================================================
+    //  Swing Components
+    // ======================================================
+
+    private val searchField = SearchTextField()
 
     private val rootNode = DefaultMutableTreeNode("root")
     private val treeModel = object : DefaultTreeModel(rootNode) {
@@ -81,12 +107,6 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         }
     }
 
-    private var filterText: String = ""
-
-    private var activeFileUrl: String? = null
-
-    private val searchField = SearchTextField()
-
     private val tree = object : Tree(treeModel) {
         override fun getScrollableTracksViewportWidth(): Boolean = true
     }.apply {
@@ -102,70 +122,9 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         TreeUIHelper.getInstance().installTreeSpeedSearch(this)
     }
 
-private val globalMouseWatcher = java.awt.event.AWTEventListener { event ->
-
-    if (event !is MouseEvent) {
-        return@AWTEventListener
-    }
-    val isRelevant = removeRowToolbar.component.isVisible || hoveredFileItem != null || removeTarget != null
-
-    if (!isRelevant) {
-        return@AWTEventListener
-    }
-    if (!this@ProperTabGroupsToolWindowPanel.isShowing) {
-        return@AWTEventListener
-    }
-
-    val pointer = MouseInfo.getPointerInfo()?.location
-    if (pointer == null) {
-        clearHoverState()
-        return@AWTEventListener
-    }
-
-    val point = Point(pointer)
-    SwingUtilities.convertPointFromScreen(point, this@ProperTabGroupsToolWindowPanel)
-
-    val isInsidePanel = point.x >= 0 && point.y >=0 && point.x < this@ProperTabGroupsToolWindowPanel.width && point.y < this@ProperTabGroupsToolWindowPanel.height
-
-    if (!isInsidePanel) {
-        clearHoverState()
-        return@AWTEventListener
-    }
-
-    SwingUtilities.invokeLater { refreshHoverFromMousePointer() }
-}
-
-    private var globalMouseWatcherInstalled = false
-
-    private fun installGlobalMouseWatcher(){
-        if (globalMouseWatcherInstalled) {
-            return
-        }
-        Toolkit.getDefaultToolkit()
-            .addAWTEventListener(globalMouseWatcher, AWTEvent.MOUSE_MOTION_EVENT_MASK or AWTEvent.MOUSE_EVENT_MASK)
-        globalMouseWatcherInstalled= true
-    }
-
-    private fun uninstallGlobalMouseWatcher() {
-        if (!globalMouseWatcherInstalled) {
-            return
-        }
-        Toolkit.getDefaultToolkit().removeAWTEventListener { globalMouseWatcher }
-        globalMouseWatcherInstalled = false
-    }
-
-    override fun addNotify() {
-        super.addNotify()
-        installGlobalMouseWatcher()
-    }
-
-    override fun removeNotify() {
-        uninstallGlobalMouseWatcher()
-        super.removeNotify()
-    }
-
+    // Actions and Toolbars
     private inner class RemoveFromGroupAction : AnAction(
-        "Remove from group",
+        "Remove From Group",
         "Remove this tab from the group",
         AllIcons.Actions.Close
     ) {
@@ -194,9 +153,83 @@ private val globalMouseWatcher = java.awt.event.AWTEventListener { event ->
         component.isOpaque = false
         component.border = JBUI.Borders.empty()
     }
+
     private val toolbarComponent: JComponent = createToolbar()
     private val treeScrollPane = JBScrollPane(tree)
 
+
+    // ======================================================
+    //  Global Mouse Watcher
+    // ======================================================
+
+
+    private val globalMouseWatcher = AWTEventListener { event ->
+
+        if (event !is MouseEvent) {
+            return@AWTEventListener
+        }
+        val isRelevant = removeRowToolbar.component.isVisible || hoveredFileItem != null || removeTarget != null
+
+        if (!isRelevant) {
+            return@AWTEventListener
+        }
+        if (!this@ProperTabGroupsToolWindowPanel.isShowing) {
+            return@AWTEventListener
+        }
+
+        val pointer = MouseInfo.getPointerInfo()?.location
+        if (pointer == null) {
+            clearHoverState()
+            return@AWTEventListener
+        }
+
+        val point = Point(pointer)
+        SwingUtilities.convertPointFromScreen(point, this@ProperTabGroupsToolWindowPanel)
+
+        val isInsidePanel =
+            point.x >= 0 && point.y >= 0 && point.x < this@ProperTabGroupsToolWindowPanel.width && point.y < this@ProperTabGroupsToolWindowPanel.height
+
+        if (!isInsidePanel) {
+            clearHoverState()
+            return@AWTEventListener
+        }
+
+        SwingUtilities.invokeLater { refreshHoverFromMousePointer() }
+    }
+
+    private var globalMouseWatcherInstalled = false
+
+    private fun installGlobalMouseWatcher() {
+        if (globalMouseWatcherInstalled) {
+            return
+        }
+        Toolkit.getDefaultToolkit()
+            .addAWTEventListener(globalMouseWatcher, AWTEvent.MOUSE_MOTION_EVENT_MASK or AWTEvent.MOUSE_EVENT_MASK)
+        globalMouseWatcherInstalled = true
+    }
+
+    private fun uninstallGlobalMouseWatcher() {
+        if (!globalMouseWatcherInstalled) {
+            return
+        }
+        Toolkit.getDefaultToolkit().removeAWTEventListener { globalMouseWatcher }
+        globalMouseWatcherInstalled = false
+    }
+
+    override fun addNotify() {
+        super.addNotify()
+        installGlobalMouseWatcher()
+    }
+
+    override fun removeNotify() {
+        uninstallGlobalMouseWatcher()
+        super.removeNotify()
+    }
+
+
+    // ======================================================
+    //  Init and general wiring
+    // ======================================================
     init {
         tree.model = treeModel
 
@@ -205,9 +238,6 @@ private val globalMouseWatcher = java.awt.event.AWTEventListener { event ->
         tree.layout = null
         tree.add(removeRowToolbar.component)
         removeRowToolbar.component.isVisible = false
-
-        installInlineGroupRenaming()
-        installRemoveHoverTracking()
 
         val topBar = JPanel(BorderLayout()).apply {
             add(searchField, BorderLayout.CENTER)
@@ -221,7 +251,25 @@ private val globalMouseWatcher = java.awt.event.AWTEventListener { event ->
             SwingUtilities.invokeLater { refreshHoverFromMousePointer() }
         }
 
+        // new listeners
+        installInlineGroupRenaming()
+        installRemoveHoverTracking()
+        installSearchFiltering()
+        installTreeOpenOnDoubleClick()
+        installEditorEventTracking()
+        installExpansionPersistenceTracking()
 
+        // todo: drag and drop
+
+        // persistence
+        loadPersistentState()
+        rebuildTree()
+    }
+    // ======================================================
+    // Install Helpers
+    // ======================================================
+
+    private fun installSearchFiltering() {
         // document listener
         searchField.addDocumentListener(object : DocumentAdapter() {
             override fun textChanged(e: DocumentEvent) {
@@ -229,42 +277,49 @@ private val globalMouseWatcher = java.awt.event.AWTEventListener { event ->
                 rebuildTree()
             }
         })
+    }
 
-        tree.addMouseListener(object : MouseAdapter() {
-            override fun mouseClicked(e: MouseEvent) {
+    private fun installTreeOpenOnDoubleClick() {
+        tree.addMouseListener(
+            object : MouseAdapter() {
+                override fun mouseClicked(e: MouseEvent) {
 
-                if (e.button != MouseEvent.BUTTON1) {
-                    return
+                    if (e.button != MouseEvent.BUTTON1) {
+                        return
+                    }
+
+                    val closestRow = tree.getClosestRowForLocation(e.x, e.y)
+                    if (closestRow < 0) {
+                        return
+                    }
+
+                    val rowBounds = tree.getRowBounds(closestRow)
+
+                    if (e.y !in rowBounds.y until (rowBounds.y + rowBounds.height)) {
+
+                        return
+                    }
+
+                    val path = tree.getPathForRow(closestRow) ?: return
+                    val node = path.lastPathComponent as? DefaultMutableTreeNode ?: return
+                    val data = node.userObject
+
+                    if (e.clickCount == 2 && data is NodeData.FileItem) {
+                        preferredActiveLocation =
+                            data.fileUrl to data.parentGroupId // store the last item and group we clicked
+
+                        val virtualFile = VirtualFileManager.getInstance().findFileByUrl(data.fileUrl) ?: return
+                        FileEditorManager.getInstance(project).openFile(virtualFile, true)
+                    }
                 }
+            })
+    }
 
-                val closestRow = tree.getClosestRowForLocation(e.x, e.y)
-                if (closestRow < 0) {
-                    return
-                }
-
-                val rowBounds = tree.getRowBounds(closestRow)
-
-                if (e.y !in rowBounds.y until (rowBounds.y + rowBounds.height)) {
-
-                    return
-                }
-
-                val path = tree.getPathForRow(closestRow) ?: return
-                val node = path.lastPathComponent as? DefaultMutableTreeNode ?: return
-                val data = node.userObject
-
-                if (e.clickCount == 2 && data is NodeData.FileItem) {
-                    preferredActiveLocation =
-                        data.fileUrl to data.parentGroupId // store the last item and group we clicked
-
-                    val virtualFile = VirtualFileManager.getInstance().findFileByUrl(data.fileUrl) ?: return
-                    FileEditorManager.getInstance(project).openFile(virtualFile, true)
-                }
-            }
-        })
+    private fun installEditorEventTracking() {
 
         project.messageBus.connect(this).subscribe(
-            FileEditorManagerListener.FILE_EDITOR_MANAGER, object : FileEditorManagerListener {
+            FileEditorManagerListener.FILE_EDITOR_MANAGER,
+            object : FileEditorManagerListener {
 
                 override fun fileOpened(source: FileEditorManager, file: VirtualFile) {
                     scheduleRebuildTree()
@@ -281,26 +336,8 @@ private val globalMouseWatcher = java.awt.event.AWTEventListener { event ->
                     tree.repaint()
                 }
             })
-        // todo: drag and drop
-
-        // persistence
-        loadPersistentState()
-        installExpansionPersistenceTracking()
-
-        rebuildTree()
     }
 
-    private fun clearHoverState() {
-        hoveredTab = null
-        hoveredFileItem = null
-        hoveredRowBounds = null
-        removeTarget = null
-
-        removeRowToolbar.component.isVisible = false
-
-        tree.cursor = Cursor.getDefaultCursor()
-        tree.repaint()
-    }
     private fun installRemoveHoverTracking() {
 
         tree.addMouseMotionListener(object : MouseMotionAdapter() {
@@ -391,26 +428,47 @@ private val globalMouseWatcher = java.awt.event.AWTEventListener { event ->
 
                 return isClickOnGroupText(path, data, mouseEvent)
             }
+
+            private fun isClickOnGroupText(
+                path: TreePath, group: NodeData.GroupHeader, e: MouseEvent
+            ): Boolean {
+                val bounds = tree.getPathBounds(path) ?: return false
+
+                val iconWidth = 16
+                val gap = 4
+
+                val textStartX = bounds.x + iconWidth + gap
+
+                val fm = tree.getFontMetrics(tree.font)
+                val textWidth = fm.stringWidth(group.name)
+                val textEndX = textStartX + textWidth
+
+                return e.x in textStartX..textEndX
+            }
         }
     }
 
-    //  ok so I found this online, hopefully it works. I imagine its going to fail when people zoom in and zoom out,
-//  so I might scrap this feature or find a more solid way of doing it
-    private fun isClickOnGroupText(
-        path: TreePath, group: NodeData.GroupHeader, e: MouseEvent
-    ): Boolean {
-        val bounds = tree.getPathBounds(path) ?: return false
+    private fun installExpansionPersistenceTracking() {
+        tree.addTreeExpansionListener(object : TreeExpansionListener {
+            override fun treeExpanded(event: TreeExpansionEvent?) = persistExpansionOnly()
+            override fun treeCollapsed(event: TreeExpansionEvent?) = persistExpansionOnly()
 
-        val iconWidth = 16
-        val gap = 4
+        })
+    }
+    // ======================================================
+    //  Hover logic and overlay
+    // ======================================================
 
-        val textStartX = bounds.x + iconWidth + gap
+    private fun clearHoverState() {
+        hoveredTab = null
+        hoveredFileItem = null
+        hoveredRowBounds = null
+        removeTarget = null
 
-        val fm = tree.getFontMetrics(tree.font)
-        val textWidth = fm.stringWidth(group.name)
-        val textEndX = textStartX + textWidth
+        removeRowToolbar.component.isVisible = false
 
-        return e.x in textStartX..textEndX
+        tree.cursor = Cursor.getDefaultCursor()
+        tree.repaint()
     }
 
     private fun updateHoverFromTreePoint(x: Int, y: Int) {
@@ -450,9 +508,6 @@ private val globalMouseWatcher = java.awt.event.AWTEventListener { event ->
         tree.repaint()
     }
 
-    private val removeButtonWidth = JBUI.scale(22)
-    private val removeButtonMargin = JBUI.scale(10)
-
     private fun updateRemoveButtonOverlay() {
         val comp = removeRowToolbar.component
 
@@ -478,9 +533,11 @@ private val globalMouseWatcher = java.awt.event.AWTEventListener { event ->
         if (comp.x != x || comp.y != y || comp.width != removeButtonWidth || comp.height != bounds.height)
             comp.setBounds(x, y, width, height)
         comp.isVisible = true
-//    comp.revalidate()
+        //    comp.revalidate()
         comp.repaint()
     }
+
+    private val removeButtonWidth = JBUI.scale(22)
 
     private fun refreshHoverFromMousePointer() {
         val pointer = MouseInfo.getPointerInfo()?.location ?: return
@@ -490,18 +547,9 @@ private val globalMouseWatcher = java.awt.event.AWTEventListener { event ->
         updateHoverFromTreePoint(point.x, point.y)
     }
 
-    private fun renameGroup(groupId: UUID, newName: String) {
-        val index = groups.indexOfFirst { it.id == groupId }
-        if (index < 0) return
-        groups[index] = groups[index].copy(name = newName)
-        persistModelOnly()
-        rebuildTree()
-
-        findTreePathForGroupId(groupId)?.let { path ->
-            tree.selectionPath = path
-            tree.scrollPathToVisible(path)
-        }
-    }
+    // ======================================================
+    //  Renderer
+    // ======================================================
 
     private inner class ProperTabTreeRenderer : TreeCellRenderer {
 
@@ -534,7 +582,7 @@ private val globalMouseWatcher = java.awt.event.AWTEventListener { event ->
 
                         val baseIcon = AllIcons.FileTypes.Any_type
                         icon = if (bIsActive) {
-                            badgeIcon(baseIcon, AllIcons.Actions.Checked)
+                            AllIcons.Actions.Checked.badgeIcon(baseIcon)
                         } else {
                             baseIcon
                         }
@@ -575,19 +623,18 @@ private val globalMouseWatcher = java.awt.event.AWTEventListener { event ->
             return leftSideRenderer
         }
 
-        private fun badgeIcon(base: Icon, badge: Icon): Icon {
+        private fun Icon.badgeIcon(base: Icon): Icon {
             val layered = LayeredIcon(2)
             layered.setIcon(base, 0)
-            layered.setIcon(badge, 1) // overlay
+            layered.setIcon(this, 1) // overlay
             return layered
         }
     }
 
-    /**********************************************************
 
-    Components
-
-     ********************************************************/
+    // ======================================================
+    // Toolbar actions and dialogs
+    // ======================================================
 
     private fun createToolbar(): JComponent {
         val group = DefaultActionGroup().apply {
@@ -744,136 +791,9 @@ private val globalMouseWatcher = java.awt.event.AWTEventListener { event ->
     }
 
 
-    private data class ExpansionState(
-        val expandedGroupIds: Set<UUID>,
-        val unassignedExpanded: Boolean
-    )
-
-    private fun recordExpansionState(): ExpansionState {
-        val expandedGroups = mutableSetOf<UUID>()
-        var unassignedExpanded = false
-        val rootPath = TreePath(rootNode)
-        val expanded = tree.getExpandedDescendants(rootPath) ?: return ExpansionState(emptySet(), false)
-
-        val it = expanded.iterator()
-        while (it.hasNext()) {
-            val path = it.next()
-            val node = path.lastPathComponent as? DefaultMutableTreeNode ?: continue
-
-            when (val data = node.userObject) {
-                is NodeData.GroupHeader -> expandedGroups.add(data.id)
-                is NodeData.UnassignedHeader -> unassignedExpanded = true
-            }
-        }
-
-        return ExpansionState(expandedGroups, unassignedExpanded)
-    }
-
-    private fun restoreExpansionState(state: ExpansionState, forceExpandGroupIds: Set<UUID> = emptySet()) {
-        if (state.unassignedExpanded) {
-            findTreePathForUnassigned()?.let {
-                tree.expandPath(it)
-            }
-        }
-
-        for (id in state.expandedGroupIds) {
-            findTreePathForGroupId(id)?.let {
-                tree.expandPath(it)
-            }
-        }
-
-        // I think when I get a settings menu going, I'll put this in the settings: Do we want to auto-expand the
-        // collapsed groups when they have a tab added to them?
-        for (id in forceExpandGroupIds) {
-            findTreePathForGroupId(id)?.let { tree.expandPath(it) }
-        }
-    }
-
-    private fun findTreePathForUnassigned(): TreePath? {
-        val root = treeModel.root as? DefaultMutableTreeNode ?: return null
-
-        fun dfs(node: DefaultMutableTreeNode, path: TreePath): TreePath? {
-            if (node.userObject is NodeData.UnassignedHeader) {
-                return path
-            }
-
-            val children = node.children().iterator()
-            while (children.hasNext()) {
-                val child = children.next() as DefaultMutableTreeNode
-                val result = dfs(child, path.pathByAddingChild(child))
-                if (result != null) return result
-            }
-
-            return null
-        }
-        return dfs(root, TreePath(root))
-    }
-
-    private var allowProgrammaticRenameOnce = false
-
-    private fun addNewGroupAndRename() {
-        val newGroup = Group(UUID.randomUUID(), "New Group")
-        groups.add(newGroup)
-
-        persistModelOnly()
-        rebuildTree(forceExpandGroupIds = setOf(newGroup.id))
-
-        val path = findTreePathForGroupId(newGroup.id) ?: return
-        tree.selectionPath = path
-        tree.scrollPathToVisible(path)
-        SwingUtilities.invokeLater {
-            allowProgrammaticRenameOnce = true
-            tree.requestFocusInWindow()
-            tree.startEditingAtPath(path)
-        }
-    }
-
-    private fun deleteSelectedGroup() {
-        val selected = getSelectedNodeData() as? NodeData.GroupHeader ?: return
-
-        groups.removeIf { it.id == selected.id }
-        for ((_, set) in membershipMappingByUrl) {
-            set.remove(selected.id)
-        }
-
-        persistModelOnly()
-        rebuildTree()
-    }
-
-    private fun getSelectedFileItems(): List<NodeData.FileItem> {
-        return tree.selectionPaths.orEmpty()
-            .mapNotNull { path ->
-                val node = path.lastPathComponent as? DefaultMutableTreeNode
-                node?.userObject as? NodeData.FileItem
-            }
-    }
-
-    private fun moveSelectedTabsToGroup(targetGroupId: UUID?) {
-        val selectedTabs = getSelectedFileItems()
-            .distinctBy { it.fileUrl }
-
-        if (selectedTabs.isEmpty()) {
-            return
-        }
-
-        for (tab in selectedTabs) {
-            val url = tab.fileUrl
-            if (targetGroupId == null) {
-                membershipMappingByUrl.remove(url)
-            } else {
-                membershipMappingByUrl[url] = mutableSetOf(targetGroupId)
-            }
-        }
-
-        persistModelOnly()
-        rebuildTree(forceExpandGroupIds = targetGroupId?.let { setOf(it) } ?: emptySet())
-    }
-
-    private fun getSelectedNodeData(): NodeData? {
-        val node = tree.lastSelectedPathComponent as? DefaultMutableTreeNode ?: return null
-
-        return node.userObject as? NodeData
-    }
+    // ======================================================
+    //  Tree building and selection stuff
+    // ======================================================
 
     private fun rebuildTree(forceExpandGroupIds: Set<UUID> = emptySet()) {
 
@@ -948,35 +868,6 @@ private val globalMouseWatcher = java.awt.event.AWTEventListener { event ->
         // this is also probably where I highlight/ select the active tab
     }
 
-    private fun restorePersistedOrDefaultExpansion(forceExpandGroupIds: Set<UUID>) {
-
-        val s = stateService.state
-
-        val hasPersistedExpansion = s.expandedGroupIds != null || s.unassignedExpanded != null
-
-        if (hasPersistedExpansion) {
-            val persistedExpanded: Set<UUID> = s.expandedGroupIds
-                ?.mapNotNull { runCatching { UUID.fromString(it) }.getOrNull() }
-                ?.toSet() ?: emptySet()
-
-            val persistedUnassigned = s.unassignedExpanded ?: true
-
-            restoreExpansionState(ExpansionState(persistedExpanded, persistedUnassigned), forceExpandGroupIds)
-
-        } else {
-            if (!s.hasSavedExpansion) {
-                expandAllGroups()
-            }
-        }
-    }
-
-    private fun expandAllGroups() {
-        for (group in groups) {
-            findTreePathForGroupId(group.id)?.let { tree.expandPath(it) }
-        }
-        findTreePathForUnassigned()?.let { tree.expandPath(it) }
-    }
-
     private fun filterNode(node: DefaultMutableTreeNode): DefaultMutableTreeNode? {
         val trimmedFilterText = filterText.trim()
         if (trimmedFilterText.isEmpty()) return node
@@ -1015,13 +906,6 @@ private val globalMouseWatcher = java.awt.event.AWTEventListener { event ->
         }
     }
 
-    private fun displayNameFromUrl(url: String): String {
-        val trimmed = url.trimEnd('/')
-        val lastSlash =
-            maxOf(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\')) // this should handle the last slash issues
-        return if (lastSlash >= 0) trimmed.substring(lastSlash + 1) else trimmed
-    }
-
     private fun selectActiveFileInTree() {
         val url = activeFileUrl ?: return
         val preferred = preferredActiveLocation
@@ -1041,16 +925,111 @@ private val globalMouseWatcher = java.awt.event.AWTEventListener { event ->
         tree.scrollPathToVisible(path)
     }
 
+    private fun displayNameFromUrl(url: String): String {
+        val trimmed = url.trimEnd('/')
+        val lastSlash =
+            maxOf(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\')) // this should handle the last slash issues
+        return if (lastSlash >= 0) trimmed.substring(lastSlash + 1) else trimmed
+    }
 
-    private fun scheduleRebuildTree() {
-        if (SwingUtilities.isEventDispatchThread()) {
-            rebuildTree()
+
+    // ======================================================
+    //  Expansion persistence
+    // ======================================================
+
+    private fun recordExpansionState(): ExpansionState {
+        val expandedGroups = mutableSetOf<UUID>()
+        var unassignedExpanded = false
+        val rootPath = TreePath(rootNode)
+        val expanded = tree.getExpandedDescendants(rootPath) ?: return ExpansionState(emptySet(), false)
+
+        val it = expanded.iterator()
+        while (it.hasNext()) {
+            val path = it.next()
+            val node = path.lastPathComponent as? DefaultMutableTreeNode ?: continue
+
+            when (val data = node.userObject) {
+                is NodeData.GroupHeader -> expandedGroups.add(data.id)
+                is NodeData.UnassignedHeader -> unassignedExpanded = true
+            }
+        }
+
+        return ExpansionState(expandedGroups, unassignedExpanded)
+    }
+
+    private fun restoreExpansionState(state: ExpansionState, forceExpandGroupIds: Set<UUID> = emptySet()) {
+        if (state.unassignedExpanded) {
+            findTreePathForUnassigned()?.let {
+                tree.expandPath(it)
+            }
+        }
+
+        for (id in state.expandedGroupIds) {
+            findTreePathForGroupId(id)?.let {
+                tree.expandPath(it)
+            }
+        }
+
+        // I think when I get a settings menu going, I'll put this in the settings: Do we want to auto-expand the
+        // collapsed groups when they have a tab added to them?
+        for (id in forceExpandGroupIds) {
+            findTreePathForGroupId(id)?.let { tree.expandPath(it) }
+        }
+    }
+
+    private fun restorePersistedOrDefaultExpansion(forceExpandGroupIds: Set<UUID>) {
+
+        val s = stateService.state
+
+        val hasPersistedExpansion = s.expandedGroupIds != null || s.unassignedExpanded != null
+
+        if (hasPersistedExpansion) {
+            val persistedExpanded: Set<UUID> = s.expandedGroupIds
+                ?.mapNotNull { runCatching { UUID.fromString(it) }.getOrNull() }
+                ?.toSet() ?: emptySet()
+
+            val persistedUnassigned = s.unassignedExpanded ?: true
+
+            restoreExpansionState(ExpansionState(persistedExpanded, persistedUnassigned), forceExpandGroupIds)
+
         } else {
-            ApplicationManager.getApplication().invokeLater {
-                rebuildTree()
+            if (!s.hasSavedExpansion) {
+                expandAllGroups()
             }
         }
     }
+
+    private fun expandAllGroups() {
+        for (group in groups) {
+            findTreePathForGroupId(group.id)?.let { tree.expandPath(it) }
+        }
+        findTreePathForUnassigned()?.let { tree.expandPath(it) }
+    }
+
+    private fun findTreePathForUnassigned(): TreePath? {
+        val root = treeModel.root as? DefaultMutableTreeNode ?: return null
+
+        fun dfs(node: DefaultMutableTreeNode, path: TreePath): TreePath? {
+            if (node.userObject is NodeData.UnassignedHeader) {
+                return path
+            }
+
+            val children = node.children().iterator()
+            while (children.hasNext()) {
+                val child = children.next() as DefaultMutableTreeNode
+                val result = dfs(child, path.pathByAddingChild(child))
+                if (result != null) return result
+            }
+
+            return null
+        }
+        return dfs(root, TreePath(root))
+    }
+
+
+    // ======================================================
+    // Tree path search helpers
+    // ======================================================
 
     private fun findTreePathForFileUrl(targetUrl: String): TreePath? {
         val root = treeModel.root as? DefaultMutableTreeNode ?: return null
@@ -1117,6 +1096,91 @@ private val globalMouseWatcher = java.awt.event.AWTEventListener { event ->
         return dfs(root, TreePath(root))
     }
 
+    // ======================================================
+    // Group Mutations
+    // ======================================================
+
+    private fun renameGroup(groupId: UUID, newName: String) {
+        val index = groups.indexOfFirst { it.id == groupId }
+        if (index < 0) return
+        groups[index] = groups[index].copy(name = newName)
+        persistModelOnly()
+        rebuildTree()
+
+        findTreePathForGroupId(groupId)?.let { path ->
+            tree.selectionPath = path
+            tree.scrollPathToVisible(path)
+        }
+    }
+
+    private fun addNewGroupAndRename() {
+        val newGroup = Group(UUID.randomUUID(), "New Group")
+        groups.add(newGroup)
+
+        persistModelOnly()
+        rebuildTree(forceExpandGroupIds = setOf(newGroup.id))
+
+        val path = findTreePathForGroupId(newGroup.id) ?: return
+        tree.selectionPath = path
+        tree.scrollPathToVisible(path)
+        SwingUtilities.invokeLater {
+            allowProgrammaticRenameOnce = true
+            tree.requestFocusInWindow()
+            tree.startEditingAtPath(path)
+        }
+    }
+
+    private fun deleteSelectedGroup() {
+        val selected = getSelectedNodeData() as? NodeData.GroupHeader ?: return
+
+        groups.removeIf { it.id == selected.id }
+        for ((_, set) in membershipMappingByUrl) {
+            set.remove(selected.id)
+        }
+
+        persistModelOnly()
+        rebuildTree()
+    }
+
+    private fun getSelectedNodeData(): NodeData? {
+        val node = tree.lastSelectedPathComponent as? DefaultMutableTreeNode ?: return null
+
+        return node.userObject as? NodeData
+    }
+
+    private fun getSelectedFileItems(): List<NodeData.FileItem> {
+        return tree.selectionPaths.orEmpty()
+            .mapNotNull { path ->
+                val node = path.lastPathComponent as? DefaultMutableTreeNode
+                node?.userObject as? NodeData.FileItem
+            }
+    }
+
+    private fun moveSelectedTabsToGroup(targetGroupId: UUID?) {
+        val selectedTabs = getSelectedFileItems()
+            .distinctBy { it.fileUrl }
+
+        if (selectedTabs.isEmpty()) {
+            return
+        }
+
+        for (tab in selectedTabs) {
+            val url = tab.fileUrl
+            if (targetGroupId == null) {
+                membershipMappingByUrl.remove(url)
+            } else {
+                membershipMappingByUrl[url] = mutableSetOf(targetGroupId)
+            }
+        }
+
+        persistModelOnly()
+        rebuildTree(forceExpandGroupIds = targetGroupId?.let { setOf(it) } ?: emptySet())
+    }
+
+
+    // ======================================================
+    // Save and Load
+    // ======================================================
 
     private fun loadPersistentState() {
         val s = stateService.state
@@ -1138,14 +1202,6 @@ private val globalMouseWatcher = java.awt.event.AWTEventListener { event ->
         }
     }
 
-    private fun installExpansionPersistenceTracking() {
-        tree.addTreeExpansionListener(object : TreeExpansionListener {
-            override fun treeExpanded(event: TreeExpansionEvent?) = persistExpansionOnly()
-            override fun treeCollapsed(event: TreeExpansionEvent?) = persistExpansionOnly()
-
-        })
-    }
-
     private fun persistModelOnly() {
         val s = stateService.state
         s.groups = groups.map { ProperTabGroupsStateService.GroupState(it.id.toString(), it.name) }.toMutableList()
@@ -1162,6 +1218,24 @@ private val globalMouseWatcher = java.awt.event.AWTEventListener { event ->
         s.unassignedExpanded = es.unassignedExpanded
         s.hasSavedExpansion = true
     }
+
+    // ======================================================
+    // Scheduling
+    // ======================================================
+
+    private fun scheduleRebuildTree() {
+        if (SwingUtilities.isEventDispatchThread()) {
+            rebuildTree()
+        } else {
+            ApplicationManager.getApplication().invokeLater {
+                rebuildTree()
+            }
+        }
+    }
+
+    // ======================================================
+    // Disposal
+    // ======================================================
 
     override fun dispose() {
         uninstallGlobalMouseWatcher()
