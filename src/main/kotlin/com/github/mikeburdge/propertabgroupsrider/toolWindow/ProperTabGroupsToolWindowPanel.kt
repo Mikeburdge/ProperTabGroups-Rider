@@ -77,7 +77,6 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
     private var hoveredFileItem: NodeData.FileItem? = null // data for the action stuff
     private var hoveredRowBounds: Rectangle? = null // positioning
     private var removeTarget: NodeData.FileItem? = null
-    private var contextMenuTarget: NodeData? = null
 
 
     // Expansion stuff
@@ -213,7 +212,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         if (!globalMouseWatcherInstalled) {
             return
         }
-        Toolkit.getDefaultToolkit().removeAWTEventListener(globalMouseWatcher)
+        Toolkit.getDefaultToolkit().removeAWTEventListener ( globalMouseWatcher)
         globalMouseWatcherInstalled = false
     }
 
@@ -257,7 +256,6 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         installRemoveHoverTracking()
         installSearchFiltering()
         installTreeOpenOnDoubleClick()
-        installTreeContextMenu()
         installEditorEventTracking()
         installExpansionPersistenceTracking()
 
@@ -307,72 +305,14 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
                     val data = node.userObject
 
                     if (e.clickCount == 2 && data is NodeData.FileItem) {
-                        openFileItem(data)
+                        preferredActiveLocation =
+                            data.fileUrl to data.parentGroupId // store the last item and group we clicked
+
+                        val virtualFile = VirtualFileManager.getInstance().findFileByUrl(data.fileUrl) ?: return
+                        FileEditorManager.getInstance(project).openFile(virtualFile, true)
                     }
                 }
             })
-    }
-
-    private fun installTreeContextMenu() {
-
-        val popupListener = object : MouseAdapter() {
-            override fun mousePressed(e: MouseEvent) = maybeShowTreeContextMenu(e)
-            override fun mouseReleased(e: MouseEvent) = maybeShowTreeContextMenu(e)
-        }
-
-        tree.addMouseListener(popupListener)
-    }
-
-
-    private fun maybeShowTreeContextMenu(e: MouseEvent){
-        if (!e.isPopupTrigger) {
-            return
-        }
-
-        val path = tree.getPathForLocation(e.x, e.y) ?: return
-        val bounds = tree.getPathBounds(path) ?: return
-
-        if (e.y !in bounds.y until (bounds.y + bounds.height)) {
-            return
-        }
-
-        if (!tree.isPathSelected(path)) {
-            tree.selectionPath = path
-        }
-        val node = path.lastPathComponent as? DefaultMutableTreeNode ?: return
-        val data = node.userObject as? NodeData ?: return
-
-        contextMenuTarget = data
-        val popupGroup = buildTreeContextMenuGroup(data)
-        val popupMenu = ActionManager.getInstance().createActionPopupMenu("ProperTabGroups.TreeContextMenu", popupGroup)
-
-        popupMenu.component.show(tree, e.x, e.y)
-    }
-
-    // builds a different context menu depending on what the user clicked
-    private fun buildTreeContextMenuGroup(target: NodeData): DefaultActionGroup {
-        return DefaultActionGroup().apply{
-            when (target) {
-                is NodeData.FileItem -> {
-                    add(OpenContextFileAction())
-                    addSeparator()
-                    add(AssignContextSectionToGroupsAction())
-
-                    if (target.parentGroupId != null) {
-                        add(RemoveContextFileFromGroupAction())
-                    }
-                }
-
-                is NodeData.GroupHeader -> {
-                    add(RenameContextGroupAction())
-                    add(RemoveContextFileFromGroupAction())
-                }
-
-                is NodeData.UnassignedHeader -> {
-                    // empty for now, think of something to put here
-                }
-            }
-        }
     }
 
     private fun installEditorEventTracking() {
@@ -695,65 +635,6 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
     // ======================================================
     // Toolbar actions and dialogs
     // ======================================================
-
-    private inner class OpenContextFileAction : AnAction("Open", "Open this file", null) {
-        override fun actionPerformed(p0: AnActionEvent) {
-            val item = contextMenuTarget as? NodeData.FileItem ?: return
-            openFileItem(item)
-        }
-
-        override fun update(e: AnActionEvent) {
-            e.presentation.isEnabled = contextMenuTarget is NodeData.FileItem
-        }
-    }
-
-    private inner class AssignContextSectionToGroupsAction : AnAction(
-        "Assign to Groups...",
-        "Assign selected tabs to groups",
-        null
-    ) {
-        override fun actionPerformed(p0: AnActionEvent) {
-            showAssignGroupsPopupForSelectedTabs()
-        }
-
-        override fun update(e: AnActionEvent) {
-            e.presentation.isEnabled = getSelectedFileItems().isNotEmpty()
-        }
-    }
-
-
-    private inner class RemoveContextFileFromGroupAction :
-        AnAction("Remove from This Group", "Remove this file from the clicked group", AllIcons.General.Remove) {
-        override fun actionPerformed(p0: AnActionEvent) {
-            val item = contextMenuTarget as? NodeData.FileItem ?: return
-            val groupId = item.parentGroupId ?: return
-
-            removeFileFromGroup(item.fileUrl, groupId)
-            persistModelOnly()
-            rebuildTree()
-
-            SwingUtilities.invokeLater { refreshHoverFromMousePointer() }
-        }
-
-        override fun update(e: AnActionEvent) {
-            val item = contextMenuTarget as? NodeData.FileItem
-            e.presentation.isEnabled = item?.parentGroupId != null
-        }
-    }
-
-    private inner class RenameContextGroupAction : AnAction(
-        "Rename Group...",
-        "Rename this Group",
-        null
-    ) {
-        override fun actionPerformed(p0: AnActionEvent) {
-            beginInlineRenameForSelectedGroup()
-        }
-
-        override fun update(e: AnActionEvent) {
-            e.presentation.isEnabled = contextMenuTarget is NodeData.GroupHeader
-        }
-    }
 
     private fun createToolbar(): JComponent {
         val group = DefaultActionGroup().apply {
@@ -1218,36 +1099,6 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
     // ======================================================
     // Group Mutations
     // ======================================================
-
-    private fun openFileItem(item: NodeData.FileItem) {
-        preferredActiveLocation = item.fileUrl to item.parentGroupId
-
-        val virtualFile = VirtualFileManager.getInstance().findFileByUrl(item.fileUrl) ?: return
-        FileEditorManager.getInstance(project).openFile(virtualFile, true)
-    }
-
-    private fun removeFileFromGroup(fileUrl: String, groupId: UUID) {
-        membershipMappingByUrl[fileUrl]?.remove(groupId)
-
-        if (membershipMappingByUrl[fileUrl]?.isEmpty() == true) {
-            membershipMappingByUrl.remove(fileUrl)
-        }
-    }
-
-    private fun beginInlineRenameForSelectedGroup() {
-        val selected = getSelectedNodeData() as? NodeData.GroupHeader ?: return
-        val path = findTreePathForGroupId(selected.id) ?: return
-
-        tree.selectionPath = path
-        tree.scrollPathToVisible(path)
-
-        SwingUtilities.invokeLater {
-            allowProgrammaticRenameOnce = true
-            tree.requestFocusInWindow()
-            tree.startEditingAtPath(path)
-        }
-    }
-
 
     private fun renameGroup(groupId: UUID, newName: String) {
         val index = groups.indexOfFirst { it.id == groupId }
