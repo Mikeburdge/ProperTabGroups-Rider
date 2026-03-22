@@ -329,12 +329,18 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             return
         }
 
-        val path = tree.getPathForLocation(e.x, e.y) ?: return
-        val bounds = tree.getPathBounds(path) ?: return
+        val closestRow = tree.getClosestRowForLocation(e.x, e.y)
+        if (closestRow < 0) {
+            return
+        }
+
+        val bounds = tree.getRowBounds(closestRow) ?: return
 
         if (e.y !in bounds.y until (bounds.y + bounds.height)) {
             return
         }
+
+        val path = tree.getClosestPathForLocation(e.x, e.y)
 
         if (!tree.isPathSelected(path)) {
             tree.selectionPath = path
@@ -361,11 +367,14 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
                     if (target.parentGroupId != null) {
                         add(RemoveContextFileFromGroupAction())
                     }
+
+                    add(QuickCreateGroupFromSelectionAction())
                 }
 
                 is NodeData.GroupHeader -> {
                     add(RenameContextGroupAction())
                     add(RemoveContextFileFromGroupAction())
+                    add(DeleteGroupAction())
                 }
 
                 is NodeData.UnassignedHeader -> {
@@ -766,6 +775,22 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
         toolbar.targetComponent = this
         return toolbar.component
+    }
+
+    private inner class QuickCreateGroupFromSelectionAction : AnAction(
+                "Create Group From Selection",
+        "Create a new group from the selected tabs",
+        AllIcons.General.Add
+                )
+    {
+        override fun actionPerformed(e: AnActionEvent) {
+            createGroupFromSelectedTabsAndRename()
+        }
+
+        override fun update(e: AnActionEvent) {
+            e.presentation.isEnabled = getSelectedFileItems().isNotEmpty();
+        }
+
     }
 
     private inner class AddGroupAction : AnAction(
@@ -1272,6 +1297,36 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         val path = findTreePathForGroupId(newGroup.id) ?: return
         tree.selectionPath = path
         tree.scrollPathToVisible(path)
+        SwingUtilities.invokeLater {
+            allowProgrammaticRenameOnce = true
+            tree.requestFocusInWindow()
+            tree.startEditingAtPath(path)
+        }
+    }
+
+    private fun createGroupFromSelectedTabsAndRename(){
+        val selectedTabs = getSelectedFileItems().distinctBy { it.fileUrl }
+
+        if (selectedTabs.isEmpty()) {
+            return
+        }
+
+        val newGroup = Group(UUID.randomUUID(), "New Group")
+        groups.add(newGroup)
+
+        for (tab in selectedTabs) {
+            val memberships = membershipMappingByUrl.getOrPut(tab.fileUrl){ mutableSetOf()}
+            memberships.add(newGroup.id)
+        }
+
+        persistModelOnly()
+        rebuildTree(forceExpandGroupIds = setOf(newGroup.id))
+
+        val path = findTreePathForGroupId(newGroup.id) ?: return
+
+        tree.selectionPath = path
+        tree.scrollPathToVisible(path)
+
         SwingUtilities.invokeLater {
             allowProgrammaticRenameOnce = true
             tree.requestFocusInWindow()
