@@ -14,6 +14,7 @@ import com.intellij.openapi.fileEditor.FileEditorManagerEvent
 import com.intellij.openapi.fileEditor.FileEditorManagerListener
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
+import com.intellij.openapi.vfs.VfsUtilCore
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.ui.*
@@ -24,6 +25,8 @@ import com.intellij.ui.treeStructure.Tree
 import com.intellij.util.ui.JBUI
 import java.awt.*
 import java.awt.event.*
+import java.nio.file.Files
+import java.nio.file.Paths
 import java.util.*
 import javax.swing.*
 import javax.swing.event.DocumentEvent
@@ -39,7 +42,10 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         data object UnassignedHeader : NodeData()
 
         data class FileItem(
-            val fileUrl: String, val displayName: String, val parentGroupId: UUID? // null means unassigned
+            val fileUrl: String,
+            val displayName: String,
+            val parentGroupId: UUID?, // null means unassigned
+            val isMissing: Boolean
         ) : NodeData()
     }
 
@@ -324,7 +330,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
     }
 
 
-    private fun maybeShowTreeContextMenu(e: MouseEvent){
+    private fun maybeShowTreeContextMenu(e: MouseEvent) {
         if (!e.isPopupTrigger) {
             return
         }
@@ -357,7 +363,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
     // builds a different context menu depending on what the user clicked
     private fun buildTreeContextMenuGroup(target: NodeData): DefaultActionGroup {
-        return DefaultActionGroup().apply{
+        return DefaultActionGroup().apply {
             when (target) {
                 is NodeData.FileItem -> {
                     add(OpenContextFileAction())
@@ -648,15 +654,22 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
                     is NodeData.FileItem -> {
                         val bIsActive = data.fileUrl == activeFileUrl
+                        val bIsMissing = data.isMissing
 
-                        val baseIcon = AllIcons.FileTypes.Any_type
-                        icon = if (bIsActive) {
+                        val baseIcon = if(bIsMissing){
+                            AllIcons.General.Warning
+                        }
+                        else {
+                            AllIcons.FileTypes.Any_type
+                        }
+
+                        icon = if (bIsActive && !bIsMissing) {
                             AllIcons.Actions.Checked.badgeIcon(baseIcon)
                         } else {
                             baseIcon
                         }
 
-                        val attributes = if (bIsActive) {
+                        val attributes = if (bIsActive && !bIsMissing) {
                             SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES
                         } else {
                             SimpleTextAttributes.REGULAR_ATTRIBUTES
@@ -670,6 +683,9 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
                         }
 
                         append(data.displayName, attributes)
+                        if (bIsMissing) {
+                            append(" (missing)", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                        }
                     }
 
                     else -> {
@@ -712,7 +728,8 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         }
 
         override fun update(e: AnActionEvent) {
-            e.presentation.isEnabled = contextMenuTarget is NodeData.FileItem
+            val item = contextMenuTarget as? NodeData.FileItem
+            e.presentation.isEnabled = item != null && !item.isMissing
         }
     }
 
@@ -778,11 +795,10 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
     }
 
     private inner class QuickCreateGroupFromSelectionAction : AnAction(
-                "Create Group From Selection",
+        "Create Group From Selection",
         "Create a new group from the selected tabs",
         AllIcons.General.Add
-                )
-    {
+    ) {
         override fun actionPerformed(e: AnActionEvent) {
             createGroupFromSelectedTabsAndRename()
         }
@@ -961,7 +977,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
                 groupNode.add(
                     DefaultMutableTreeNode(
                         NodeData.FileItem(
-                            fileUrl = url, displayName = displayNameFromUrl(url), parentGroupId = group.id
+                            fileUrl = url, displayName = displayNameFromUrl(url), parentGroupId = group.id, !doesFileCurrentlyExist(url)
                         )
                     )
                 )
@@ -982,7 +998,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             unassignedNode.add(
                 DefaultMutableTreeNode(
                     NodeData.FileItem(
-                        fileUrl = file.url, displayName = file.name, parentGroupId = null
+                        fileUrl = file.url, displayName = file.name, parentGroupId = null, !doesFileCurrentlyExist(file.url)
                     )
                 )
             )
@@ -1076,6 +1092,14 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         return if (lastSlash >= 0) trimmed.substring(lastSlash + 1) else trimmed
     }
 
+    private fun doesFileCurrentlyExist(fileUrl: String): Boolean {
+        return runCatching {
+            val path = Paths.get(VfsUtilCore.urlToPath(fileUrl))
+            Files.exists(path)
+        }.getOrElse {
+            VirtualFileManager.getInstance().findFileByUrl(fileUrl)?.isValid == true
+        }
+    }
 
     // ======================================================
     //  Expansion persistence
@@ -1245,6 +1269,10 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
     // ======================================================
 
     private fun openFileItem(item: NodeData.FileItem) {
+        if (item.isMissing) {
+            return
+        }
+
         preferredActiveLocation = item.fileUrl to item.parentGroupId
 
         val virtualFile = VirtualFileManager.getInstance().findFileByUrl(item.fileUrl) ?: return
@@ -1304,7 +1332,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         }
     }
 
-    private fun createGroupFromSelectedTabsAndRename(){
+    private fun createGroupFromSelectedTabsAndRename() {
         val selectedTabs = getSelectedFileItems().distinctBy { it.fileUrl }
 
         if (selectedTabs.isEmpty()) {
@@ -1315,7 +1343,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
         groups.add(newGroup)
 
         for (tab in selectedTabs) {
-            val memberships = membershipMappingByUrl.getOrPut(tab.fileUrl){ mutableSetOf()}
+            val memberships = membershipMappingByUrl.getOrPut(tab.fileUrl) { mutableSetOf() }
             memberships.add(newGroup.id)
         }
 
