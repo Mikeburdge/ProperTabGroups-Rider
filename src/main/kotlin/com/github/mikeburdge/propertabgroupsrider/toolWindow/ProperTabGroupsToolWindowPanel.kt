@@ -43,6 +43,7 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             val name: String,
             val tabCount: Int
         ) : NodeData()
+
         data class UnassignedHeader(
             val tabCount: Int
         ) : NodeData()
@@ -651,23 +652,22 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
                     is NodeData.GroupHeader -> {
                         icon = AllIcons.Nodes.Folder
                         append(data.name, SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
-                        append (" (${data.tabCount})", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                        append(" (${data.tabCount})", SimpleTextAttributes.GRAYED_ATTRIBUTES)
                     }
 
                     is NodeData.UnassignedHeader -> {
                         icon = AllIcons.General.InspectionsOK
                         append("Unassigned", SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
-                        append (" (${data.tabCount})", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                        append(" (${data.tabCount})", SimpleTextAttributes.GRAYED_ATTRIBUTES)
                     }
 
                     is NodeData.FileItem -> {
                         val bIsActive = data.fileUrl == activeFileUrl
                         val bIsMissing = data.isMissing
 
-                        val baseIcon = if(bIsMissing){
+                        val baseIcon = if (bIsMissing) {
                             AllIcons.General.Warning
-                        }
-                        else {
+                        } else {
                             AllIcons.FileTypes.Any_type
                         }
 
@@ -979,13 +979,17 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
                 membershipMappingByUrl.asSequence().filter { (_, groupIds) -> groupIds.contains(group.id) }
                     .map { (url, _) -> url }.toList()
 
-            val groupNode = DefaultMutableTreeNode(NodeData.GroupHeader(group.id, group.name, tabCount = memberUrls.size))
+            val groupNode =
+                DefaultMutableTreeNode(NodeData.GroupHeader(group.id, group.name, tabCount = memberUrls.size))
 
             for (url in memberUrls) {
                 groupNode.add(
                     DefaultMutableTreeNode(
                         NodeData.FileItem(
-                            fileUrl = url, displayName = displayNameFromUrl(url), parentGroupId = group.id, !doesFileCurrentlyExist(url)
+                            fileUrl = url,
+                            displayName = displayNameFromUrl(url),
+                            parentGroupId = group.id,
+                            !doesFileCurrentlyExist(url)
                         )
                     )
                 )
@@ -1006,7 +1010,10 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
             unassignedNode.add(
                 DefaultMutableTreeNode(
                     NodeData.FileItem(
-                        fileUrl = file.url, displayName = file.name, parentGroupId = null, !doesFileCurrentlyExist(file.url)
+                        fileUrl = file.url,
+                        displayName = file.name,
+                        parentGroupId = null,
+                        !doesFileCurrentlyExist(file.url)
                     )
                 )
             )
