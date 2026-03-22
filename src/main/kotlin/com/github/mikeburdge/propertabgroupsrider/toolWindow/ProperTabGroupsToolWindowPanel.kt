@@ -38,8 +38,14 @@ import javax.swing.tree.*
 class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(BorderLayout()), Disposable {
 
     private sealed class NodeData {
-        data class GroupHeader(val id: UUID, val name: String) : NodeData()
-        data object UnassignedHeader : NodeData()
+        data class GroupHeader(
+            val id: UUID,
+            val name: String,
+            val tabCount: Int
+        ) : NodeData()
+        data class UnassignedHeader(
+            val tabCount: Int
+        ) : NodeData()
 
         data class FileItem(
             val fileUrl: String,
@@ -645,11 +651,13 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
                     is NodeData.GroupHeader -> {
                         icon = AllIcons.Nodes.Folder
                         append(data.name, SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
+                        append (" (${data.tabCount})", SimpleTextAttributes.GRAYED_ATTRIBUTES)
                     }
 
                     is NodeData.UnassignedHeader -> {
                         icon = AllIcons.General.InspectionsOK
                         append("Unassigned", SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
+                        append (" (${data.tabCount})", SimpleTextAttributes.GRAYED_ATTRIBUTES)
                     }
 
                     is NodeData.FileItem -> {
@@ -967,11 +975,11 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
         // handle member tabs
         for (group in groups) {
-            val groupNode = DefaultMutableTreeNode(NodeData.GroupHeader(group.id, group.name))
-
             val memberUrls =
                 membershipMappingByUrl.asSequence().filter { (_, groupIds) -> groupIds.contains(group.id) }
                     .map { (url, _) -> url }.toList()
+
+            val groupNode = DefaultMutableTreeNode(NodeData.GroupHeader(group.id, group.name, tabCount = memberUrls.size))
 
             for (url in memberUrls) {
                 groupNode.add(
@@ -988,10 +996,10 @@ class ProperTabGroupsToolWindowPanel(private val project: Project) : JPanel(Bord
 
         val openFiles = FileEditorManager.getInstance(project).openFiles
 
-        val unassignedNode = DefaultMutableTreeNode(NodeData.UnassignedHeader)
         val unassignedFiles = openFiles.filter { file ->
             membershipMappingByUrl[file.url].isNullOrEmpty()
         }
+        val unassignedNode = DefaultMutableTreeNode(NodeData.UnassignedHeader(tabCount = unassignedFiles.size))
 
         // handle unassigned tabs
         for (file in unassignedFiles) {
